@@ -45,7 +45,18 @@ Un IDE desktop (Windows/Linux) che permette di creare applicazioni **Blazor WebA
 - Avalonia UI 11.x per l'IDE
 - AvaloniaEdit per l'editor codice
 - Microsoft.CodeAnalysis (Roslyn) per parsing/diagnostica del codice Behavior
-- WebView: **da validare in Fase 0** — opzioni: `WebView.Avalonia`, CEF via `CefNet`, o wrapper custom su WebView2 (Windows)/WebKitGTK (Linux). Non assumere che una funzioni su entrambe le piattaforme senza test.
+- WebView: **`Avalonia.Controls.WebView` (pacchetto ufficiale AvaloniaUI OÜ), versione `12.1.0`** — validato in Fase 0 (2026-08-25).
+  - Motivazione della scelta rispetto alle alternative valutate:
+    - `WebView.Avalonia` (MicroSugarDeveloperOrg): community, ferma alla 11.0.0.1, poco manutenuta.
+    - `CefNet` (CEF): ultima release `105.3.22248.142` legata a Chromium 105 (~2022), progetto di fatto abbandonato; inoltre imbarca un intero runtime Chromium (>100MB) per piattaforma.
+    - `Avalonia.Controls.WebView`: pacchetto ufficiale del team Avalonia, mantenuto attivamente (ultimo aggiornamento verificato il 15/08/2026), usa il **webview nativo del sistema operativo** (nessun runtime browser da ridistribuire): `WebView2` su Windows, `WebKitGTK` (via GTK, con adapter sia offscreen/composito sia X11 nativo) su Linux, `WKWebView` su macOS.
+  - **Nota di versione**: richiede `Avalonia` core `>= 12.0.0`. La versione `12.1.1` (e successive) del pacchetto `Avalonia` ha rimosso il target `net8.0` (richiede `net10.0`) ed emette source generator compilati per un compilatore Roslyn più recente di quello incluso nell'SDK .NET 8 (`CS9057`/`InitializeComponent` mancante). Per restare su **.NET 8** occorre fissare tutti i pacchetti Avalonia (incluso `Avalonia.Controls.WebView`) alla riga `12.1.0` o `12.0.x`, non alla latest.
+  - Dipendenze di sistema:
+    - **Linux**: richiede WebKitGTK installato (`libwebkit2gtk-4.0-37`/`4.1`, `libjavascriptcoregtk-4.0-18`/`4.1` — nome pacchetto varia per distro/versione, es. Ubuntu 22.04 usa la serie `4.0`). Va documentato come prerequisito di sistema per l'utente finale (non ridistribuibile via NuGet).
+    - **Windows**: richiede il runtime **WebView2** (Evergreen), preinstallato di default su Windows 10 21H2+/11; su versioni precedenti va verificato/distribuito il bootstrapper Evergreen.
+  - Stato della validazione:
+    - **Linux (Ubuntu 22.04, WebKitGTK 2.50.4)**: build OK; la navigazione verso un file HTML statico locale (`file://`) è stata confermata **funzionalmente** tramite gli eventi `NativeWebView.NavigationStarted`/`NavigationCompleted` (entrambi scattano con l'URL corretto). La verifica **visiva a pixel** non è stata possibile in questo ambiente sandbox perché privo di accesso GPU (`/dev/dri` non accessibile, warning `libEGL: failed to open /dev/dri/card1`), condizione che impedisce la composizione grafica del webview anche forzando il rendering software di Avalonia. **Da riconfermare visivamente su una macchina Linux reale con GPU/driver disponibili.**
+    - **Windows**: non verificato in questo ciclo — l'ambiente di sviluppo corrente è un sandbox Linux, non è stato possibile eseguire test su Windows. **Da validare su una macchina Windows reale prima di considerare la Fase 0 chiusa.**
 - Blazor WebAssembly .NET 8 per le app generate, PWA standard (manifest + service worker)
 
 ## 5. Moduli (ordine di implementazione)
