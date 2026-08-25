@@ -33,18 +33,24 @@
             <MenuItem Header="_Help" />
         </Menu>
 
-        <!-- Pannello Output/Immediate in basso, vuoto -->
+        <!-- Pannello Output/Immediate in basso -->
         <Border DockPanel.Dock="Bottom" Height="140" BorderBrush="Gray" BorderThickness="0,1,0,0">
             <DockPanel Margin="4">
                 <TextBlock DockPanel.Dock="Top" Text="Output" FontWeight="Bold" Margin="4" />
-                <TextBox IsReadOnly="True" AcceptsReturn="True" Background="Transparent" BorderThickness="0" />
+                <TextBox x:Name="OutputTextBox" IsReadOnly="True" AcceptsReturn="True"
+                         Background="Transparent" BorderThickness="0" />
             </DockPanel>
         </Border>
 
-        <!-- Toolbox a sinistra, vuota -->
+        <!-- Toolbox a sinistra: controlli trascinabili verso la superficie di design -->
         <Border DockPanel.Dock="Left" Width="180" BorderBrush="Gray" BorderThickness="0,0,1,0">
             <DockPanel Margin="4">
                 <TextBlock DockPanel.Dock="Top" Text="Toolbox" FontWeight="Bold" Margin="4" />
+                <ListBox x:Name="ToolboxList" SelectionMode="Single" Background="Transparent">
+                    <ListBoxItem x:Name="ToolboxButtonItem" Tag="VbButton">Button</ListBoxItem>
+                    <ListBoxItem x:Name="ToolboxLabelItem" Tag="VbLabel">Label</ListBoxItem>
+                    <ListBoxItem x:Name="ToolboxTextBoxItem" Tag="VbTextBox">TextBox</ListBoxItem>
+                </ListBox>
             </DockPanel>
         </Border>
 
@@ -55,8 +61,10 @@
             </DockPanel>
         </Border>
 
-        <!-- Superficie di design al centro: la WebView che ospita il progetto Blazor reale -->
-        <Border BorderBrush="Gray" BorderThickness="1">
+        <!-- Superficie di design al centro: la WebView che ospita il progetto Blazor reale.
+             Modulo 6: accetta il drop dalla Toolbox (nessuna persistenza su file ancora,
+             quella e' il modulo 7 - qui si registra solo il drop in Output). -->
+        <Border x:Name="DesignSurface" BorderBrush="Gray" BorderThickness="1" DragDrop.AllowDrop="True">
             <NativeWebView x:Name="DesignerWebView" />
         </Border>
 

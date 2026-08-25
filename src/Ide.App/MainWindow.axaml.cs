@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Threading.Tasks;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Threading;
 using Ide.Designer;
 
@@ -26,7 +27,54 @@ public partial class MainWindow : Window
         // il processo figlio `dotnet watch`.
         AppDomain.CurrentDomain.ProcessExit += (_, _) => _watchHost.Dispose();
 
+        DesignSurface.AddHandler(DragDrop.DragOverEvent, OnDesignSurfaceDragOver);
+        DesignSurface.AddHandler(DragDrop.DropEvent, OnDesignSurfaceDrop);
+
+        // ListBoxItem consuma il PointerPressed per la selezione (Handled = true) prima
+        // che un handler XAML ordinario venga invocato: serve handledEventsToo per
+        // intercettarlo comunque e avviare il drag.
+        foreach (var item in new[] { ToolboxButtonItem, ToolboxLabelItem, ToolboxTextBoxItem })
+            item.AddHandler(PointerPressedEvent, OnToolboxItemPointerPressed, handledEventsToo: true);
+
         _ = StartDesignerAsync();
+    }
+
+    // Modulo 6: avvio del drag da un elemento della Toolbox. Nessuna persistenza su file
+    // ancora (quella e' il modulo 7, il generatore di codice): qui si trasporta solo il
+    // nome del tipo di controllo trascinato, come testo semplice (DataFormat.Text).
+    private async void OnToolboxItemPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (sender is not Control { Tag: string controlType })
+            return;
+
+        var item = new DataTransferItem();
+        item.Set(DataFormat.Text, controlType);
+
+        var data = new DataTransfer();
+        data.Add(item);
+
+        await DragDrop.DoDragDropAsync(e, data, DragDropEffects.Copy);
+    }
+
+    private void OnDesignSurfaceDragOver(object? sender, DragEventArgs e)
+    {
+        e.DragEffects = e.DataTransfer.Contains(DataFormat.Text) ? DragDropEffects.Copy : DragDropEffects.None;
+    }
+
+    private void OnDesignSurfaceDrop(object? sender, DragEventArgs e)
+    {
+        if (e.DataTransfer.TryGetText() is not { } controlType)
+            return;
+
+        var position = e.GetPosition(DesignSurface);
+        AppendOutput($"Drop: {controlType} a ({position.X:0}, {position.Y:0})");
+    }
+
+    private void AppendOutput(string line)
+    {
+        OutputTextBox.Text = OutputTextBox.Text is { Length: > 0 } existing
+            ? $"{existing}{Environment.NewLine}{line}"
+            : line;
     }
 
     // Modulo 5: avvia `dotnet watch` sul progetto Blazor come processo figlio e, quando
