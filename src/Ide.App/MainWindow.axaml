@@ -56,7 +56,8 @@
 
         <!-- Property Grid a destra (modulo 8): elenco dei controlli posizionati in alto,
              editor delle proprieta' [VisualProperty] del controllo selezionato sotto,
-             generati via reflection. -->
+             generati via reflection. Il doppio click su un elemento (modulo 9) genera
+             l'handler del click in {Form}.Behavior.cs. -->
         <Border DockPanel.Dock="Right" Width="240" BorderBrush="Gray" BorderThickness="1,0,0,0">
             <DockPanel Margin="4">
                 <TextBlock DockPanel.Dock="Top" Text="Properties" FontWeight="Bold" Margin="4" />

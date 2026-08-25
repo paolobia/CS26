@@ -9,4 +9,12 @@ namespace Ide.Designer;
 /// Property Grid (modulo 8) di riflettere sulle stesse proprieta' che il generatore di
 /// codice (modulo 7) scrive su file.
 /// </summary>
-public sealed record PlacedControl(string FieldName, string ControlType, IVisualComponent Visual);
+public sealed record PlacedControl(string FieldName, string ControlType, IVisualComponent Visual)
+{
+    /// <summary>
+    /// Modulo 9: true se il doppio click ha gia' generato l'handler in
+    /// <c>{Form}.Behavior.cs</c> per questo controllo. Dice a
+    /// <see cref="FormCodeGenerator"/> se collegare l'evento nel markup generato.
+    /// </summary>
+    public bool HasClickHandler { get; set; }
+}

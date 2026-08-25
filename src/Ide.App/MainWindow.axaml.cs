@@ -47,6 +47,11 @@ public partial class MainWindow : Window
         // il processo figlio `dotnet watch`.
         AppDomain.CurrentDomain.ProcessExit += (_, _) => _watchHost.Dispose();
 
+        // Come per la Toolbox (modulo 6): ListBoxItem marca il pointer event come Handled
+        // per la selezione prima che un gesture recognizer piu' in alto lo riconosca come
+        // DoubleTapped, serve handledEventsToo per intercettarlo comunque.
+        PlacedControlsList.AddHandler(InputElement.DoubleTappedEvent, OnPlacedControlDoubleTapped, handledEventsToo: true);
+
         DesignSurface.AddHandler(DragDrop.DragOverEvent, OnDesignSurfaceDragOver);
         DesignSurface.AddHandler(DragDrop.DropEvent, OnDesignSurfaceDrop);
 
@@ -191,6 +196,40 @@ public partial class MainWindow : Window
                 };
                 PropertyEditorsPanel.Children.Add(textBox);
             }
+        }
+    }
+
+    // Modulo 9: doppio click su un controllo -> genera l'handler del click in
+    // {Form}.Behavior.cs (file dello sviluppatore, mai rigenerato per intero) e collega
+    // OnClick nel markup rigenerato. Solo VbButton espone un OnClick oggi.
+    private async void OnPlacedControlDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (PlacedControlsList.SelectedItem is not string fieldName || _projectDirectory is null)
+            return;
+
+        var placed = _placedControls.FirstOrDefault(c => c.FieldName == fieldName);
+        if (placed is null)
+            return;
+
+        if (placed.ControlType != "VbButton")
+        {
+            AppendOutput($"{fieldName} ({placed.ControlType}): nessun evento gestito dal doppio click in questa fase.");
+            return;
+        }
+
+        var methodName = $"{fieldName}_Click";
+        var pagesDirectory = Path.Combine(_projectDirectory, "Pages");
+        var behaviorPath = BehaviorFileGenerator.EnsureClickHandler(pagesDirectory, FormName, FormNamespace, methodName);
+
+        if (!placed.HasClickHandler)
+        {
+            placed.HasClickHandler = true;
+            AppendOutput($"Generato handler {methodName} in {Path.GetFileName(behaviorPath)}");
+            await RegenerateAndReloadAsync();
+        }
+        else
+        {
+            AppendOutput($"{methodName} esiste gia' in {Path.GetFileName(behaviorPath)}: apri il file per modificarlo.");
         }
     }
 

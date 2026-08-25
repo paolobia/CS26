@@ -41,7 +41,15 @@ public static class FormCodeGenerator
         sb.AppendLine();
         sb.AppendLine("""<div style="position:relative;width:100%;height:600px;">""");
         foreach (var control in controls)
-            sb.AppendLine($"    <{control.ControlType} Visual=\"{control.FieldName}\" />");
+        {
+            // Modulo 9: il markup collega l'evento solo se il doppio click ha gia'
+            // generato l'handler corrispondente in {Form}.Behavior.cs - altrimenti il
+            // metodo non esisterebbe ancora e la compilazione fallirebbe.
+            var onClick = control is { ControlType: "VbButton", HasClickHandler: true }
+                ? $" OnClick=\"{control.FieldName}_Click\""
+                : string.Empty;
+            sb.AppendLine($"    <{control.ControlType} Visual=\"{control.FieldName}\"{onClick} />");
+        }
         sb.AppendLine("</div>");
 
         return sb.ToString();

@@ -7,3 +7,4 @@ obj/
 # asset del template ma un artefatto locale di prova/uso del designer.
 templates/BlazorPwaTemplate/Pages/DesignerForm.razor
 templates/BlazorPwaTemplate/Pages/DesignerForm.razor.designer.cs
+templates/BlazorPwaTemplate/Pages/DesignerForm.Behavior.cs
