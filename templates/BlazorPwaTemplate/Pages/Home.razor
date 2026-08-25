@@ -7,3 +7,43 @@
 Welcome to your new app.
 
 <DesignerTestButton />
+
+<h2>VbControls demo (modulo 3)</h2>
+<div style="position:relative;height:150px;border:1px solid #ccc;">
+    <VbLabel Visual="_label" />
+    <VbButton Visual="_button" OnClick="HandleClick" />
+    <VbTextBox Visual="_textBox" ValueChanged="HandleTextChanged" />
+</div>
+
+@code {
+    private readonly VbLabelVisual _label = new()
+    {
+        Text = "In attesa...",
+        LayoutBox = new LayoutBox { X = 10, Y = 10, Width = 300, Height = 24 }
+    };
+
+    private readonly VbButtonVisual _button = new()
+    {
+        Text = "Click me",
+        LayoutBox = new LayoutBox { X = 10, Y = 50, Width = 120, Height = 32 }
+    };
+
+    private readonly VbTextBoxVisual _textBox = new()
+    {
+        Placeholder = "Scrivi qui...",
+        LayoutBox = new LayoutBox { X = 10, Y = 90, Width = 200, Height = 28 }
+    };
+
+    private int _clickCount;
+
+    private void HandleClick()
+    {
+        _clickCount++;
+        _label.Text = $"Cliccato {_clickCount} volte";
+    }
+
+    private void HandleTextChanged(string value)
+    {
+        _label.Text = $"Hai scritto: {value}";
+    }
+}

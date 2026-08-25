@@ -1,0 +1,17 @@
+<button style="@Style" hidden="@(!Visual.StyleModel.Visible)" disabled="@(!Visual.StyleModel.Enabled)" @onclick="OnClick">
+    @Visual.Text
+</button>
+
+@code {
+    [Parameter, EditorRequired]
+    public VbButtonVisual Visual { get; set; } = null!;
+
+    [Parameter]
+    public EventCallback OnClick { get; set; }
+
+    private string Style =>
+        $"position:absolute;left:{Visual.LayoutBox.X}px;top:{Visual.LayoutBox.Y}px;" +
+        $"width:{Visual.LayoutBox.Width}px;height:{Visual.LayoutBox.Height}px;" +
+        $"background-color:{Visual.StyleModel.BackgroundColor};color:{Visual.StyleModel.ForegroundColor};" +
+        $"font-family:{Visual.StyleModel.FontFamily};font-size:{Visual.StyleModel.FontSize}px;";
+}
