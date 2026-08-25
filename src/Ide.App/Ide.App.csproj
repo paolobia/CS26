@@ -20,5 +20,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Ide.Designer\Ide.Designer.csproj" />
+    <ProjectReference Include="..\VbControls\VbControls.csproj" />
   </ItemGroup>
 </Project>

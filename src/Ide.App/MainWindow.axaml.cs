@@ -1,11 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
 using Ide.Designer;
+using VbControls;
+using VbControls.Abstractions;
 
 namespace Ide.App;
 
@@ -78,8 +81,10 @@ public partial class MainWindow : Window
         e.DragEffects = e.DataTransfer.Contains(DataFormat.Text) ? DragDropEffects.Copy : DragDropEffects.None;
     }
 
-    // Modulo 7: il drop non si limita piu' a loggare, genera davvero i due file
-    // posseduti dal designer (DesignerForm.razor / DesignerForm.razor.designer.cs).
+    // Modulo 7: il drop genera davvero i due file posseduti dal designer
+    // (DesignerForm.razor / DesignerForm.razor.designer.cs), a partire dall'istanza
+    // reale dell'aspetto (IVisualComponent) creata qui: e' la stessa istanza su cui la
+    // Property Grid (modulo 8) riflette per mostrarne ed editarne le proprieta'.
     private async void OnDesignSurfaceDrop(object? sender, DragEventArgs e)
     {
         if (e.DataTransfer.TryGetText() is not { } controlType)
@@ -95,19 +100,33 @@ public partial class MainWindow : Window
         var (width, height) = DefaultSizeByControlType[controlType];
         var fieldName = NextFieldName(controlType);
 
-        _placedControls.Add(new PlacedControl(
-            fieldName, controlType,
-            X: Math.Max(0, position.X - width / 2),
-            Y: Math.Max(0, position.Y - height / 2),
-            Width: width, Height: height));
+        var visual = CreateVisual(controlType);
+        visual.LayoutBox = new LayoutBox
+        {
+            X = Math.Max(0, position.X - width / 2),
+            Y = Math.Max(0, position.Y - height / 2),
+            Width = width,
+            Height = height,
+        };
 
-        var pagesDirectory = Path.Combine(_projectDirectory, "Pages");
-        var (razorPath, designerCsPath) = FormCodeGenerator.Generate(pagesDirectory, FormName, FormNamespace, _placedControls);
+        var placed = new PlacedControl(fieldName, controlType, visual);
+        _placedControls.Add(placed);
 
-        AppendOutput($"Generato {fieldName} ({controlType}) -> {Path.GetFileName(razorPath)}, {Path.GetFileName(designerCsPath)}");
+        PlacedControlsList.Items.Add(fieldName);
+        PlacedControlsList.SelectedItem = fieldName; // mostra subito le sue proprieta' nella grid
 
-        await ShowDesignerFormAsync();
+        AppendOutput($"Aggiunto {fieldName} ({controlType})");
+
+        await RegenerateAndReloadAsync();
     }
+
+    private static IVisualComponent CreateVisual(string controlType) => controlType switch
+    {
+        "VbButton" => new VbButtonVisual(),
+        "VbLabel" => new VbLabelVisual(),
+        "VbTextBox" => new VbTextBoxVisual(),
+        _ => throw new NotSupportedException($"Tipo di controllo sconosciuto: {controlType}"),
+    };
 
     private string NextFieldName(string controlType)
     {
@@ -115,6 +134,74 @@ public partial class MainWindow : Window
         var count = _fieldCounters.GetValueOrDefault(controlType, 0) + 1;
         _fieldCounters[controlType] = count;
         return $"{shortName}{count}";
+    }
+
+    // Modulo 8: Property Grid via reflection. Quando l'utente seleziona un controllo
+    // nell'elenco, ricostruisce gli editor per le sue proprieta' [VisualProperty].
+    private void OnPlacedControlSelected(object? sender, SelectionChangedEventArgs e)
+    {
+        PropertyEditorsPanel.Children.Clear();
+
+        if (PlacedControlsList.SelectedItem is not string fieldName)
+            return;
+
+        var placed = _placedControls.FirstOrDefault(c => c.FieldName == fieldName);
+        if (placed is null)
+            return;
+
+        string? currentCategory = null;
+        foreach (var property in VisualPropertyReader.GetEditableProperties(placed.Visual))
+        {
+            var category = property.GetCustomAttributes(typeof(VisualPropertyAttribute), inherit: true)
+                .Cast<VisualPropertyAttribute>()
+                .First()
+                .Category;
+
+            if (category != currentCategory)
+            {
+                PropertyEditorsPanel.Children.Add(new TextBlock
+                {
+                    Text = category,
+                    FontWeight = Avalonia.Media.FontWeight.Bold,
+                    Margin = new Avalonia.Thickness(0, 8, 0, 0),
+                });
+                currentCategory = category;
+            }
+
+            PropertyEditorsPanel.Children.Add(new TextBlock { Text = property.Name });
+
+            var currentValue = property.GetValue(placed.Visual);
+            if (property.PropertyType == typeof(bool))
+            {
+                var checkBox = new CheckBox { IsChecked = currentValue as bool? };
+                checkBox.IsCheckedChanged += async (_, _) =>
+                {
+                    property.SetValue(placed.Visual, checkBox.IsChecked ?? false);
+                    await RegenerateAndReloadAsync();
+                };
+                PropertyEditorsPanel.Children.Add(checkBox);
+            }
+            else
+            {
+                var textBox = new TextBox { Text = currentValue?.ToString() ?? string.Empty };
+                textBox.LostFocus += async (_, _) =>
+                {
+                    property.SetValue(placed.Visual, textBox.Text ?? string.Empty);
+                    await RegenerateAndReloadAsync();
+                };
+                PropertyEditorsPanel.Children.Add(textBox);
+            }
+        }
+    }
+
+    private async Task RegenerateAndReloadAsync()
+    {
+        var pagesDirectory = Path.Combine(_projectDirectory!, "Pages");
+        var (razorPath, designerCsPath) = FormCodeGenerator.Generate(pagesDirectory, FormName, FormNamespace, _placedControls);
+
+        AppendOutput($"Generato -> {Path.GetFileName(razorPath)}, {Path.GetFileName(designerCsPath)}");
+
+        await ShowDesignerFormAsync();
     }
 
     // Dopo il primo drop naviga la WebView sulla pagina generata; dopo i drop successivi

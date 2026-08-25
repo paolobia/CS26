@@ -1,4 +1,7 @@
+using System.Globalization;
+using System.Reflection;
 using System.Text;
+using VbControls.Abstractions;
 
 namespace Ide.Designer;
 
@@ -12,13 +15,6 @@ namespace Ide.Designer;
 /// </summary>
 public static class FormCodeGenerator
 {
-    private static readonly IReadOnlyDictionary<string, string> VisualTypeByControlType = new Dictionary<string, string>
-    {
-        ["VbButton"] = "VbButtonVisual",
-        ["VbLabel"] = "VbLabelVisual",
-        ["VbTextBox"] = "VbTextBoxVisual",
-    };
-
     public static (string RazorPath, string DesignerCsPath) Generate(
         string pagesDirectory,
         string formName,
@@ -67,10 +63,13 @@ public static class FormCodeGenerator
         sb.AppendLine("{");
         foreach (var control in controls)
         {
-            var visualType = VisualTypeByControlType[control.ControlType];
-            sb.AppendLine($"    protected {visualType} {control.FieldName} {{ get; }} = new()");
+            sb.AppendLine($"    protected {control.Visual.GetType().Name} {control.FieldName} {{ get; }} = new()");
             sb.AppendLine("    {");
-            sb.AppendLine($"        LayoutBox = new LayoutBox {{ X = {control.X:0}, Y = {control.Y:0}, Width = {control.Width:0}, Height = {control.Height:0} }}");
+            sb.AppendLine($"        LayoutBox = {EmitLayoutBox(control.Visual.LayoutBox)},");
+            // Le proprieta' [VisualProperty] (modulo 8) sono cio' che l'utente personalizza
+            // tramite la Property Grid: qui vengono serializzate cosi' come sono nell'istanza.
+            foreach (var property in VisualPropertyReader.GetEditableProperties(control.Visual))
+                sb.AppendLine($"        {property.Name} = {EmitValue(property.GetValue(control.Visual))},");
             sb.AppendLine("    };");
             sb.AppendLine();
         }
@@ -78,4 +77,32 @@ public static class FormCodeGenerator
 
         return sb.ToString();
     }
+
+    private static string EmitLayoutBox(LayoutBox box) =>
+        $"new LayoutBox {{ X = {EmitDouble(box.X)}, Y = {EmitDouble(box.Y)}, Width = {EmitDouble(box.Width)}, Height = {EmitDouble(box.Height)} }}";
+
+    private static string EmitValue(object? value) => value switch
+    {
+        null => "null",
+        string s => "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"",
+        bool b => b ? "true" : "false",
+        double d => EmitDouble(d),
+        _ => throw new NotSupportedException(
+            $"FormCodeGenerator non sa serializzare un valore di tipo {value.GetType()}."),
+    };
+
+    private static string EmitDouble(double value) => value.ToString(CultureInfo.InvariantCulture);
+}
+
+/// <summary>
+/// Riflessione condivisa tra generatore di codice (modulo 7) e Property Grid (modulo 8)
+/// sulle proprieta' marcate <see cref="VisualPropertyAttribute"/>: e' cosi' che entrambi
+/// restano sempre d'accordo su cosa e' editabile per un dato controllo.
+/// </summary>
+public static class VisualPropertyReader
+{
+    public static IEnumerable<PropertyInfo> GetEditableProperties(IVisualComponent visual) =>
+        visual.GetType()
+            .GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(p => p.GetCustomAttribute<VisualPropertyAttribute>() is not null && p.CanRead && p.CanWrite);
 }

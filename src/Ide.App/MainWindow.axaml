@@ -54,10 +54,15 @@
             </DockPanel>
         </Border>
 
-        <!-- Property Grid a destra, vuota -->
+        <!-- Property Grid a destra (modulo 8): elenco dei controlli posizionati in alto,
+             editor delle proprieta' [VisualProperty] del controllo selezionato sotto,
+             generati via reflection. -->
         <Border DockPanel.Dock="Right" Width="240" BorderBrush="Gray" BorderThickness="1,0,0,0">
             <DockPanel Margin="4">
                 <TextBlock DockPanel.Dock="Top" Text="Properties" FontWeight="Bold" Margin="4" />
+                <ListBox x:Name="PlacedControlsList" DockPanel.Dock="Top" Height="120"
+                         SelectionChanged="OnPlacedControlSelected" />
+                <StackPanel x:Name="PropertyEditorsPanel" Margin="4" Spacing="4" />
             </DockPanel>
         </Border>
 
