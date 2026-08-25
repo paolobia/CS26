@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using Avalonia.Controls;
 
 namespace Ide.App;
@@ -10,14 +9,13 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
-        var testPagePath = Path.Combine(AppContext.BaseDirectory, "DesignerTestPage", "index.html");
-        Console.WriteLine($"[WebViewTest] Loading {testPagePath}, exists={File.Exists(testPagePath)}");
-
         DesignerWebView.NavigationStarted += (_, e) =>
-            Console.WriteLine($"[WebViewTest] NavigationStarted: {e.Request}");
+            Console.WriteLine($"[DesignerWebView] NavigationStarted: {e.Request}");
         DesignerWebView.NavigationCompleted += (_, e) =>
-            Console.WriteLine($"[WebViewTest] NavigationCompleted: request={e.Request}");
+            Console.WriteLine($"[DesignerWebView] NavigationCompleted: {e.Request}");
 
-        DesignerWebView.Source = new Uri(testPagePath);
+        // Task 0.2: la WebView carica il progetto Blazor reale servito da `dotnet watch`
+        // (in produzione l'URL/porta sara' determinato dinamicamente all'avvio di dotnet watch).
+        DesignerWebView.Source = new Uri("http://localhost:5245/");
     }
 }

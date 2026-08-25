@@ -1,0 +1,7 @@
+<button @onclick="Increment">Click me (@_clickCount)</button>
+
+@code {
+    private int _clickCount;
+
+    private void Increment() => _clickCount++;
+}
