@@ -31,6 +31,8 @@ public partial class MainWindow : Window
 
     private string? _projectDirectory;
     private bool _designerFormOpened;
+    private string _currentPagePath = string.Empty; // "" = home, "designerform" = form generato
+    private bool _isRunning;
 
     public MainWindow()
     {
@@ -60,6 +62,14 @@ public partial class MainWindow : Window
         // intercettarlo comunque e avviare il drag.
         foreach (var item in new[] { ToolboxButtonItem, ToolboxLabelItem, ToolboxTextBoxItem })
             item.AddHandler(PointerPressedEvent, OnToolboxItemPointerPressed, handledEventsToo: true);
+
+        // Modulo 10: F5 = Run, esce dalla modalita' di design (vincolo architetturale n.5:
+        // design mode e run mode sono lo stesso bundle, pilotato da un flag in query string).
+        KeyDown += async (_, e) =>
+        {
+            if (e.Key == Key.F5)
+                await RunAsync();
+        };
 
         _ = StartDesignerAsync();
     }
@@ -259,6 +269,9 @@ public partial class MainWindow : Window
             return;
         }
 
+        _currentPagePath = "designerform";
+        _isRunning = false; // un'edit nel designer riporta sempre in modalita' di design
+
         if (_designerFormOpened)
         {
             // Il server e' stato riavviato da dotnet watch ma l'URL e' identico a prima:
@@ -268,10 +281,42 @@ public partial class MainWindow : Window
         }
         else
         {
-            DesignerWebView.Source = new Uri($"{uri}designerform");
+            DesignerWebView.Source = BuildUri(uri, design: true);
             _designerFormOpened = true;
         }
     }
+
+    // Modulo 10: F5 esce dalla modalita' di design e naviga la stessa pagina senza il
+    // flag `?design=true` - stesso bundle, nessuna ricompilazione (vincolo architetturale
+    // n.5). "Stop" torna alla modalita' di design.
+    private Task RunAsync()
+    {
+        if (_watchHost.ServerUri is null)
+        {
+            AppendOutput("Run (F5) ignorato: il server non e' ancora pronto.");
+            return Task.CompletedTask;
+        }
+
+        _isRunning = true;
+        AppendOutput("Run (F5): avvio senza la modalita' di design.");
+        DesignerWebView.Source = BuildUri(_watchHost.ServerUri, design: false);
+        return Task.CompletedTask;
+    }
+
+    private void OnRunMenuClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => _ = RunAsync();
+
+    private void OnStopMenuClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (_watchHost.ServerUri is null || !_isRunning)
+            return;
+
+        _isRunning = false;
+        AppendOutput("Stop: torno alla modalita' di design.");
+        DesignerWebView.Source = BuildUri(_watchHost.ServerUri, design: true);
+    }
+
+    private Uri BuildUri(Uri serverUri, bool design) =>
+        new($"{serverUri}{_currentPagePath}{(design ? "?design=true" : string.Empty)}");
 
     private void AppendOutput(string line)
     {
@@ -289,7 +334,7 @@ public partial class MainWindow : Window
         try
         {
             var uri = await _watchHost.StartAsync(_projectDirectory, "http://localhost:5245");
-            await Dispatcher.UIThread.InvokeAsync(() => DesignerWebView.Source = uri);
+            await Dispatcher.UIThread.InvokeAsync(() => DesignerWebView.Source = BuildUri(uri, design: true));
         }
         catch (Exception ex)
         {

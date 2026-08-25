@@ -26,8 +26,8 @@
                 <MenuItem Header="_Output" />
             </MenuItem>
             <MenuItem Header="_Run">
-                <MenuItem Header="_Start (F5)" />
-                <MenuItem Header="S_top" />
+                <MenuItem Header="_Start (F5)" Click="OnRunMenuClicked" />
+                <MenuItem Header="S_top" Click="OnStopMenuClicked" />
             </MenuItem>
             <MenuItem Header="_Debug" />
             <MenuItem Header="_Help" />
