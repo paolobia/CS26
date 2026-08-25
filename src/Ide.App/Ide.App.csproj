@@ -17,4 +17,8 @@
     <PackageReference Include="Avalonia.Fonts.Inter" Version="12.0.0" />
     <PackageReference Include="Avalonia.Controls.WebView" Version="12.0.0" />
   </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Ide.Designer\Ide.Designer.csproj" />
+  </ItemGroup>
 </Project>
