@@ -2,8 +2,63 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="450"
+        mc:Ignorable="d" d:DesignWidth="1024" d:DesignHeight="700"
         x:Class="Ide.App.MainWindow"
-        Title="Ide.App">
-    <NativeWebView x:Name="DesignerWebView" />
+        Title="Ide.App"
+        Width="1024" Height="700">
+    <DockPanel>
+
+        <!-- Barra dei menu: solo voci, nessun handler collegato ancora -->
+        <Menu DockPanel.Dock="Top">
+            <MenuItem Header="_File">
+                <MenuItem Header="_New Project" />
+                <MenuItem Header="_Open Project" />
+                <Separator />
+                <MenuItem Header="_Save" />
+                <MenuItem Header="Save _As" />
+                <Separator />
+                <MenuItem Header="E_xit" />
+            </MenuItem>
+            <MenuItem Header="_Edit" />
+            <MenuItem Header="_View">
+                <MenuItem Header="_Toolbox" />
+                <MenuItem Header="_Properties" />
+                <MenuItem Header="_Output" />
+            </MenuItem>
+            <MenuItem Header="_Run">
+                <MenuItem Header="_Start (F5)" />
+                <MenuItem Header="S_top" />
+            </MenuItem>
+            <MenuItem Header="_Debug" />
+            <MenuItem Header="_Help" />
+        </Menu>
+
+        <!-- Pannello Output/Immediate in basso, vuoto -->
+        <Border DockPanel.Dock="Bottom" Height="140" BorderBrush="Gray" BorderThickness="0,1,0,0">
+            <DockPanel Margin="4">
+                <TextBlock DockPanel.Dock="Top" Text="Output" FontWeight="Bold" Margin="4" />
+                <TextBox IsReadOnly="True" AcceptsReturn="True" Background="Transparent" BorderThickness="0" />
+            </DockPanel>
+        </Border>
+
+        <!-- Toolbox a sinistra, vuota -->
+        <Border DockPanel.Dock="Left" Width="180" BorderBrush="Gray" BorderThickness="0,0,1,0">
+            <DockPanel Margin="4">
+                <TextBlock DockPanel.Dock="Top" Text="Toolbox" FontWeight="Bold" Margin="4" />
+            </DockPanel>
+        </Border>
+
+        <!-- Property Grid a destra, vuota -->
+        <Border DockPanel.Dock="Right" Width="240" BorderBrush="Gray" BorderThickness="1,0,0,0">
+            <DockPanel Margin="4">
+                <TextBlock DockPanel.Dock="Top" Text="Properties" FontWeight="Bold" Margin="4" />
+            </DockPanel>
+        </Border>
+
+        <!-- Superficie di design al centro: la WebView che ospita il progetto Blazor reale -->
+        <Border BorderBrush="Gray" BorderThickness="1">
+            <NativeWebView x:Name="DesignerWebView" />
+        </Border>
+
+    </DockPanel>
 </Window>
