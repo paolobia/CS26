@@ -6,12 +6,14 @@
 
 Un IDE desktop (Windows/Linux) che permette di creare applicazioni **Blazor WebAssembly (.NET 8)**, distribuite come **PWA installabile**, con un'esperienza di sviluppo visuale (RAD) ispirata a Visual Basic 6: form designer drag&drop, property grid, doppio click su un controllo per generare l'handler evento, F5 per eseguire.
 
+**Filosofia "tutto vive nel Form"** (ispirata a C++Builder/Delphi, non solo a VB6): un Form non contiene solo controlli visibili. Qualunque componente — un bottone, ma anche un client HTTP, un timer, un accesso a LocalStorage — è un cittadino di prima classe del Form: ha un nome, appare nella Property Grid, viene generato come campo nello stesso file designer. La differenza fra "visuale" e "non-visuale" è solo se produce una resa grafica *a runtime*: in fase di design, entrambi hanno una rappresentazione sulla superficie (un controllo vero per i visuali, un'icona per i non-visuali), coerentemente col vincolo n.1 (il designer non ridisegna nulla, mostra l'app vera). Dettagli in sezione 2.1.
+
 ## 2. Vincoli architetturali (non negoziabili)
 
 1. **Il designer non ridisegna i controlli.** Usa una WebView embedded dentro Avalonia che carica il vero progetto Blazor dell'utente, servito localmente da `dotnet watch`, in modalità `?design=true`. Ciò che si vede nel designer È l'app reale.
-2. **Separazione netta aspetto/logica**, per composizione (non ereditarietà):
-   - `IVisualComponent` → layout, stile, proprietà (posseduto dal designer).
-   - `ComponentBehavior<T>` → eventi e logica (posseduto dallo sviluppatore).
+2. **Separazione netta aspetto/logica**, per composizione (non ereditarietà). Per "aspetto" si intende la rappresentazione nel designer — resa grafica a runtime per un componente visuale, semplice icona di design per uno non-visuale (sezione 2.1) — mai la logica applicativa:
+   - `IVisualComponent`/`INonVisualComponent` → layout (o posizione dell'icona), stile, proprietà (posseduto dal designer).
+   - `ComponentBehavior<T>` → logica di default riusabile fornita da chi scrive un componente `VbControls` (non l'event wiring del Form: quello, generato dal doppio click, sono metodi piatti nella partial class del Form — vedi sezione 2.1).
    - Componente Blazor sottile come collante (`VbButton`, `VbTextBox`, ecc.).
 3. **Tre file per ogni Form:**
    - `MyForm.razor` — generato dal designer.
@@ -20,6 +22,35 @@ Un IDE desktop (Windows/Linux) che permette di creare applicazioni **Blazor WebA
 4. **Linguaggio di descrizione app: C# puro.** Nessun DSL/XML proprietario intermedio.
 5. **Design mode e Run mode = stesso bundle**, pilotato da un flag.
 6. **Tutto client-side.** Storage locale (IndexedDB/LocalStorage via JS interop), nessun backend richiesto.
+
+## 2.1. Componenti visuali e non-visuali (2026-08-26)
+
+Decisione di design a lungo termine, discussa esplicitamente con l'utente: estendere il modello di componente per supportare, oltre ai controlli visuali (`VbButton`, `VbLabel`, `VbTextBox`), componenti **non-visuali** nello stile C++Builder/Delphi — un client HTTP, un timer, un wrapper su LocalStorage: vivono sul Form, sono configurabili, ma non producono nulla nel DOM a runtime.
+
+**Gerarchia delle interfacce** in `VbControls.Abstractions` (evoluzione non distruttiva dell'attuale `IVisualComponent`, che oggi obbliga `LayoutBox` + `StyleModel` per qualsiasi cosa):
+- `IDesignComponent` (nuova base): `Id`, `LayoutBox`, `Properties`. `LayoutBox` qui significa "dove sta la sua rappresentazione nel designer" — non implica che a runtime ci sia una resa grafica in quella posizione.
+- `IVisualComponent : IDesignComponent` — contratto invariato per chi lo consuma oggi; aggiunge solo `StyleModel` (colori/font/visibilità, ha senso solo se c'è qualcosa da vedere a runtime). `VbButton`, `VbLabel`, `VbTextBox` non cambiano.
+- `INonVisualComponent : IDesignComponent` (nuova) — nessun `StyleModel`: a runtime non c'è nulla da stilare perché non c'è nulla da vedere. `LayoutBox` resta solo per posizionare l'icona nel designer.
+
+**Il componente Blazor "collante"** (vincolo n.2) per un tipo non-visuale renderizza *solo* un'icona di design, condizionata al flag `?design=true` introdotto nel modulo 10 (finora un no-op mai consumato — questo ne è il primo utilizzo reale):
+
+```razor
+@if (IsDesignMode) {
+    <div class="vb-nonvisual-icon" style="position:absolute;left:...px;top:...px;">🌐 @Visual.Id</div>
+}
+@code {
+    [Parameter, EditorRequired] public VbHttpClientVisual Visual { get; set; } = null!;
+    [CascadingParameter] public bool IsDesignMode { get; set; }
+}
+```
+
+`IsDesignMode` arriva come `CascadingValue` impostato una sola volta nel Form generato (letto da `NavigationManager.Uri`), non riletto da ogni componente.
+
+**I riferimenti incrociati fra componenti funzionano già, senza plumbing aggiuntiva.** Sia i componenti visuali sia quelli non-visuali diventano campi della stessa partial class generata (`{Form}.razor.designer.cs` + `{Form}.Behavior.cs`, vincolo n.3): un handler come `Button1_Click` può chiamare direttamente `HttpClient1.GetAsync(...)`, perché sono entrambi campi della stessa classe. Non ovvio finché non lo si nota esplicitamente.
+
+**Toolbox futura.** Con più tipi di componenti la Toolbox oggi hardcoded in XAML (`MainWindow.axaml`, 3 `ListBoxItem` fissi) non scala. Direzione naturale (non un impegno immediato): popolarla via reflection sugli assembly `VbControls*`, cercando tipi decorati con un futuro attributo `[ToolboxComponent(Icon, Category, DisplayName)]`.
+
+**Esempi di componenti non-visuali candidati**, coerenti col vincolo n.6 (tutto client-side): `VbHttpClient` (chiamate a API esterne dalla WASM), `VbLocalStorage`/`VbIndexedDb` (wrapper su JS interop), `VbTimer`. Solo esempi guida, non un impegno a implementarli subito — si veda modulo 13 in sezione 5.
 
 ## 3. Struttura repository (fissata, non improvvisare nomi diversi)
 
@@ -75,6 +106,7 @@ Un IDE desktop (Windows/Linux) che permette di creare applicazioni **Blazor WebA
 10. Run (F5) end-to-end
 11. Debug
 12. Build/Publish/Distribuzione PWA
+13. Componenti non-visuali: `IDesignComponent`/`INonVisualComponent` (sezione 2.1) + primo componente di esempio (`VbHttpClient`) + Toolbox estesa via reflection
 
 ## 6. Criteri generali di accettazione
 
