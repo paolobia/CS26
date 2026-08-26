@@ -6,6 +6,38 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
 
+  <!--
+    Pubblicazione framework-dependent single-file (scripts/publish-*.{sh,ps1}): un solo
+    eseguibile, richiede .NET 8 Runtime installato sulla macchina di destinazione.
+    Attive solo in Release per non toccare l'esperienza di sviluppo/debug quotidiana.
+  -->
+  <PropertyGroup Condition="'$(Configuration)'=='Release'">
+    <!-- Niente cartelle cs/de/es/fr/... con le risorse localizzate di Roslyn/Avalonia
+         accanto all'eseguibile: teniamo solo l'inglese. -->
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- Niente .pdb sparsi nella cartella di pubblicazione. -->
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <!--
+    Il ComponentPluginLoader (Ide.Designer) compila i componenti-plugin con Roslyn
+    referenziando VbControls.dll/VbControls.Abstractions.dll/Microsoft.JSInterop.dll come
+    FILE FISICI accanto all'eseguibile (Assembly.LoadFrom + MetadataReference.CreateFromFile).
+    In una pubblicazione single-file questi assembly verrebbero normalmente incorporati
+    nell'unico eseguibile e sparirebbero da disco, rompendo silenziosamente il
+    caricamento dei plugin: li escludiamo esplicitamente dal bundle, cosi' restano
+    copiati accanto all'exe come nella build di sviluppo (bin/Debug/net8.0/).
+  -->
+  <Target Name="KeepPluginAssembliesOutOfSingleFile" BeforeTargets="_ComputeResolvedFilesToPublishTypes">
+    <ItemGroup>
+      <ResolvedFileToPublish Update="@(ResolvedFileToPublish)"
+                              Condition="'%(FileName)' == 'VbControls' or '%(FileName)' == 'VbControls.Abstractions' or '%(FileName)' == 'Microsoft.JSInterop'">
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+
   <ItemGroup>
     <None Include="DesignerTestPage\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

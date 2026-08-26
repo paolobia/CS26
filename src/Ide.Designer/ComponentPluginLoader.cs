@@ -122,12 +122,53 @@ public sealed class ComponentPluginLoader : IDisposable
         _context = new ComponentsLoadContext();
         var assembly = _context.LoadFromStream(peStream);
 
+        var problemiFirma = new List<string>();
+
         Components = assembly.GetTypes()
             .Where(t => t is { IsClass: true, IsAbstract: false } && typeof(IDesignComponent).IsAssignableFrom(t))
+            .Where(t =>
+            {
+                var problemi = VerificaFirmaComponente(t, typeof(IDesignComponent));
+                problemiFirma.AddRange(problemi);
+                return problemi.Count == 0;
+            })
             .Select(ToDiscoveredComponent)
             .ToList();
 
-        return [];
+        return problemiFirma;
+    }
+
+    /// <summary>
+    /// Controllo esplicito, via reflection, che <paramref name="tipo"/> implementi ogni
+    /// membro di <paramref name="interfacciaRichiesta"/> con la firma corretta. Nel percorso
+    /// da sorgente qui compilato con Roslyn e' gia' garantito dal compilatore (una classe
+    /// concreta non puo' implementare un'interfaccia solo in parte), quindi in pratica non
+    /// esclude mai nulla oggi - resta pero' come rete di sicurezza a basso costo, riusabile
+    /// il giorno in cui si caricheranno anche assembly gia' compilati (DLL), dove non c'e'
+    /// alcun compilatore a garantire la conformita' per conto nostro.
+    /// </summary>
+    internal static IReadOnlyList<string> VerificaFirmaComponente(Type tipo, Type interfacciaRichiesta)
+    {
+        var problemi = new List<string>();
+
+        foreach (var metodo in interfacciaRichiesta.GetMethods())
+        {
+            var parametri = metodo.GetParameters().Select(p => p.ParameterType).ToArray();
+            var impl = tipo.GetMethod(metodo.Name, parametri);
+
+            if (impl is null)
+                problemi.Add($"{tipo.Name}: manca {metodo.Name}({string.Join(", ", parametri.Select(p => p.Name))})");
+            else if (impl.ReturnType != metodo.ReturnType)
+                problemi.Add($"{tipo.Name}: {metodo.Name} ritorna {impl.ReturnType.Name}, atteso {metodo.ReturnType.Name}");
+        }
+
+        foreach (var prop in interfacciaRichiesta.GetProperties())
+        {
+            if (tipo.GetProperty(prop.Name, prop.PropertyType) is null)
+                problemi.Add($"{tipo.Name}: manca la proprieta' {prop.Name} di tipo {prop.PropertyType.Name}");
+        }
+
+        return problemi;
     }
 
     private static void EnsureAssemblyLoaded(string fileName)
