@@ -1,0 +1,9 @@
+.page {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+}
+
+.content {
+    padding-top: 1.5rem;
+}

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -261,6 +262,32 @@ public partial class MainWindow : Window
         return $"{shortName}{count}";
     }
 
+    // Stessi tipi che FormCodeGenerator.EmitValue sa serializzare (string/bool/int/double
+    // - bool ha pero' il suo editor CheckBox dedicato, quindi qui arrivano solo gli altri).
+    private static bool TryConvert(Type targetType, string? text, out object? value)
+    {
+        if (targetType == typeof(string))
+        {
+            value = text ?? string.Empty;
+            return true;
+        }
+        if (targetType == typeof(int))
+        {
+            var ok = int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var i);
+            value = i;
+            return ok;
+        }
+        if (targetType == typeof(double))
+        {
+            var ok = double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var d);
+            value = d;
+            return ok;
+        }
+
+        value = null;
+        return false;
+    }
+
     // Modulo 8: Property Grid via reflection. Quando l'utente seleziona un controllo
     // nell'elenco, ricostruisce gli editor per le sue proprieta' [VisualProperty].
     private void OnPlacedControlSelected(object? sender, SelectionChangedEventArgs e)
@@ -311,7 +338,18 @@ public partial class MainWindow : Window
                 var textBox = new TextBox { Text = currentValue?.ToString() ?? string.Empty };
                 textBox.LostFocus += async (_, _) =>
                 {
-                    property.SetValue(placed.Visual, textBox.Text ?? string.Empty);
+                    // Il testo digitato e' sempre una string: per proprieta' non-string
+                    // (es. int IntervalMs) va convertita al tipo reale prima di SetValue,
+                    // altrimenti ArgumentException non gestita crasha tutto l'IDE (bug
+                    // trovato impostando VbTimer.IntervalMs). Un valore non convertibile si
+                    // segnala in Output e lascia la proprieta' invariata, non crasha.
+                    if (!TryConvert(property.PropertyType, textBox.Text, out var converted))
+                    {
+                        AppendOutput($"Valore non valido per {property.Name} ({property.PropertyType.Name}): \"{textBox.Text}\"");
+                        return;
+                    }
+
+                    property.SetValue(placed.Visual, converted);
                     await RegenerateAndReloadAsync();
                 };
                 PropertyEditorsPanel.Children.Add(textBox);
@@ -319,9 +357,10 @@ public partial class MainWindow : Window
         }
     }
 
-    // Modulo 9: doppio click su un controllo -> genera l'handler del click in
-    // {Form}.Behavior.cs (file dello sviluppatore, mai rigenerato per intero) e collega
-    // OnClick nel markup rigenerato. Solo VbButton espone un OnClick oggi.
+    // Modulo 9 (generalizzato oltre VbButton, per il modulo "finisci il timer"): doppio
+    // click su un controllo -> genera l'handler dell'evento descritto da
+    // ComponentEventInfo in {Form}.Behavior.cs (file dello sviluppatore, mai rigenerato
+    // per intero) e collega l'evento nel markup/codice rigenerato.
     private async void OnPlacedControlDoubleTapped(object? sender, TappedEventArgs e)
     {
         if (PlacedControlsList.SelectedItem is not string fieldName || _projectDirectory is null)
@@ -331,19 +370,20 @@ public partial class MainWindow : Window
         if (placed is null)
             return;
 
-        if (placed.ControlType != "VbButton")
+        var eventInfo = ComponentEventInfo.For(placed.ControlType);
+        if (eventInfo is null)
         {
             AppendOutput($"{fieldName} ({placed.ControlType}): nessun evento gestito dal doppio click in questa fase.");
             return;
         }
 
-        var methodName = $"{fieldName}_Click";
+        var methodName = $"{fieldName}{eventInfo.MethodSuffix}";
         var pagesDirectory = Path.Combine(_projectDirectory, "Pages");
-        var behaviorPath = BehaviorFileGenerator.EnsureClickHandler(pagesDirectory, FormName, FormNamespace, methodName);
+        var behaviorPath = BehaviorFileGenerator.EnsureEventHandler(pagesDirectory, FormName, FormNamespace, methodName, eventInfo.IsAsync);
 
-        if (!placed.HasClickHandler)
+        if (!placed.HasEventHandler)
         {
-            placed.HasClickHandler = true;
+            placed.HasEventHandler = true;
             AppendOutput($"Generato handler {methodName} in {Path.GetFileName(behaviorPath)}");
             await RegenerateAndReloadAsync();
         }

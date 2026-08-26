@@ -50,7 +50,9 @@ Decisione di design a lungo termine, discussa esplicitamente con l'utente: esten
 
 **Toolbox dinamica**: realizzata nel modulo 14 (sezione 2.2) — non piu' hardcoded in XAML.
 
-**Esempi di componenti non-visuali candidati**, coerenti col vincolo n.6 (tutto client-side): `VbHttpClient` (implementato, chiamate a API esterne dalla WASM), `VbTimer` (implementato, di prova), `VbLocalStorage`/`VbIndexedDb` (wrapper su JS interop - non ancora implementati).
+**Componenti non-visuali implementati**, coerenti col vincolo n.6 (tutto client-side): `VbHttpClient` (chiamate a API esterne dalla WASM), `VbTimer` (tick periodico, vedi sotto), `VbLocalStorage` (wrapper generico su `localStorage` via `IJSRuntime`, chiavi/valori stringa — il chiamante serializza se gli serve un tipo diverso).
+
+**Eventi dei componenti non-visuali: due meccanismi di collegamento.** `VbButton` espone `OnClick` come parametro Blazor (`EventCallback`) del collante `.razor`: il doppio click nel designer collega l'evento nel **markup generato** (`<VbButton OnClick="Button1_Click" />`). `VbTimer` invece espone un vero evento .NET sull'istanza "Visual" stessa (`event Func<Task>? Tick`, sollevato da un `System.Threading.Timer` posseduto dal collante `.razor`, mai a design-time): il doppio click collega l'evento in **codice**, in un `OnInitialized` generato in `{Form}.razor.designer.cs` (`Timer1.Tick += Timer1_Tick;`), con lo stub in `.Behavior.cs` generato come `async Task` (non `void`, per rispettare la firma `Func<Task>`). Quale dei due meccanismi usare per un dato tipo di controllo è dichiarato in una piccola tabella (`Ide.Designer.ComponentEventInfo`), non hardcoded nel doppio click: aggiungere un nuovo componente con un evento significa aggiungere una riga a quella tabella, non toccare `MainWindow`.
 
 ## 2.2. Componenti come plugin caricati a runtime da sorgente (2026-08-26)
 
@@ -80,10 +82,15 @@ Modulo 14. Decisione di design a lungo termine: i componenti — built-in e uten
     /VbControls.Abstractions → IDesignComponent, IVisualComponent, INonVisualComponent, ComponentBehavior<T>, attributi
   /templates
     /BlazorPwaTemplate       → template progetto Blazor WASM PWA
-      /Components            → modulo 14: componenti come plugin (VbButton, VbLabel, VbTextBox, VbHttpClient, VbTimer, ...), compilati sia dal build normale sia da Ide.Designer via Roslyn
+      /Components            → modulo 14: componenti come plugin (VbButton, VbLabel, VbTextBox, VbTextArea, VbHttpClient, VbTimer, VbLocalStorage, ...), compilati sia dal build normale sia da Ide.Designer via Roslyn
   /samples
     /HelloWorldApp           → primo progetto generato di prova
+    /RssFeedViewer           → modulo 15: esempio completo (visualizzatore RSS), con TUTORIAL.md
+  /scripts
+    publish-linux.sh          → pubblicazione self-contained cartella (linux-x64)
+    publish-windows.ps1       → pubblicazione self-contained cartella (win-x64)
   IdeSolution.sln
+  README.md                  → prerequisiti, build, avvio, come provare gli esempi
 ```
 
 ## 4. Stack tecnologico (scelte chiuse)
@@ -105,7 +112,7 @@ Modulo 14. Decisione di design a lungo termine: i componenti — built-in e uten
   - Stato della validazione:
     - **Linux, ambiente sandbox CI (Ubuntu 22.04, WebKitGTK 2.50.4, nessuna GPU)**: build OK; la navigazione verso un file HTML statico locale (`file://`) è stata confermata **funzionalmente** tramite gli eventi `NativeWebView.NavigationStarted`/`NavigationCompleted`. La verifica **visiva a pixel** non è stata possibile per mancanza di accesso GPU (`/dev/dri` non accessibile). Nello stesso sandbox, il caricamento del **vero progetto Blazor servito da `dotnet watch`** (Task 0.2) falliva con `TypeError: Load failed` durante il download di `dotnet.native.wasm` — causa isolata: fallimento del sandbox di rete di WebKitGTK tipico dei container/VM privi delle funzionalità kernel richieste (namespace/seccomp), non un problema del codice o della configurazione applicativa (confermato: il server rispondeva 200 con `Content-Length`/`Content-Type` corretti).
     - **Linux, macchina reale dell'utente (2026-08-25)**: **CONFERMATO end-to-end.** `dotnet watch` avviato su `templates/BlazorPwaTemplate` (porta fissa `5245`, vedi `Properties/launchSettings.json`), `Ide.App` avviato con `dotnet run`: la `NativeWebView` carica `http://localhost:5245/`, mostra la pagina reale con il componente `Shared/DesignerTestButton.razor` e il bottone risponde correttamente al click (contatore incrementa). Fase 0 per Linux considerata **chiusa**.
-    - **Windows**: non verificato — validazione esplicitamente rimandata su decisione dell'utente (2026-08-25); si procede con l'implementazione assumendo che WebView2 si comporti secondo la documentazione ufficiale Microsoft/Avalonia. Da tenere presente come rischio aperto prima di un rilascio.
+    - **Windows**: non verificato — validazione esplicitamente rimandata su decisione dell'utente (2026-08-25); si procede con l'implementazione assumendo che WebView2 si comporti secondo la documentazione ufficiale Microsoft/Avalonia. Da tenere presente come rischio aperto prima di un rilascio. `scripts/publish-windows.ps1` (2026-08-26) pubblica un eseguibile self-contained via cross-compilazione da Linux (`dotnet publish -r win-x64`, verificato: produce `Ide.App.exe` senza errori) — l'**esecuzione** resta da provare su una macchina Windows reale.
   - **Nota operativa (gotcha riscontrato)**: `dotnet watch` avvia anche un proprio *browser-refresh server* che prova a esporre un endpoint HTTPS interno; se manca il certificato di sviluppo fallisce con `Unable to configure HTTPS endpoint`. Soluzioni: `dotnet dev-certs https --trust`, oppure (più semplice, dato che qui la pagina è consumata dalla WebView e non da un browser con auto-refresh) avviare con `DOTNET_WATCH_SUPPRESS_BROWSER_REFRESH=1 dotnet watch --urls http://localhost:5245`.
 - Blazor WebAssembly .NET 8 per le app generate, PWA standard (manifest + service worker)
 
@@ -125,6 +132,7 @@ Modulo 14. Decisione di design a lungo termine: i componenti — built-in e uten
 12. Build/Publish/Distribuzione PWA: menu Build > Publish PWA esegue `dotnet publish -c Release -o bin/PwaPublish` (`ProjectPublisher`, `src/Ide.Designer`), verifica che l'output contenga `manifest.webmanifest`/`service-worker.js` (PWA installabile), con timeout+kill come rete di sicurezza e output completo su file di log (mai riga per riga nel pannello Output, per volumi grandi)
 13. Componenti non-visuali: `IDesignComponent`/`INonVisualComponent` (sezione 2.1) + primo componente di esempio (`VbHttpClient`) + Toolbox estesa via reflection
 14. Componenti come plugin caricati a runtime (sezione 2.2): `ComponentPluginLoader` (Roslyn + `AssemblyLoadContext`), attributo `[ToolboxComponent]`, Toolbox dinamica, comando Reload Components, migrazione di tutti i componenti in `Components/`
+15. Completamento del set di componenti base e primo esempio applicativo: `VbTextArea` (multilinea), `VbLocalStorage` (persistenza generica client-side), `VbTimer` con tick reale + generalizzazione del doppio click a eventi non-`OnClick` (`ComponentEventInfo`); app di esempio "RSS Feed Viewer" (`samples/RssFeedViewer`) che compone `VbTextBox` (URL) + `VbHttpClient` + `VbTimer` (refresh periodico) + `VbTextArea` (contenuto) per dimostrare il ciclo drag&drop → eventi → codice Behavior su un caso reale, non giocattolo
 
 ## 6. Criteri generali di accettazione
 

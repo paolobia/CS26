@@ -1,0 +1,23 @@
+@namespace VbControls
+@inject IJSRuntime JS
+
+@if (IsDesignMode)
+{
+    <div style="@Style" title="@Visual.Id">💾</div>
+}
+
+@code {
+    [Parameter, EditorRequired]
+    public VbLocalStorageVisual Visual { get; set; } = null!;
+
+    [CascadingParameter]
+    public bool IsDesignMode { get; set; }
+
+    protected override void OnInitialized() => Visual.JsRuntime = JS;
+
+    private string Style =>
+        $"position:absolute;left:{Visual.LayoutBox.X}px;top:{Visual.LayoutBox.Y}px;" +
+        $"width:{Visual.LayoutBox.Width}px;height:{Visual.LayoutBox.Height}px;" +
+        "font-size:20px;line-height:1;display:flex;align-items:center;justify-content:center;" +
+        "border:1px dashed #888;background:#f5f5f5;cursor:default;";
+}

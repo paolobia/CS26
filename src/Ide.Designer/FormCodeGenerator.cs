@@ -49,13 +49,16 @@ public static class FormCodeGenerator
         sb.AppendLine("""<div style="position:relative;width:100%;height:600px;">""");
         foreach (var control in controls)
         {
-            // Modulo 9: il markup collega l'evento solo se il doppio click ha gia'
-            // generato l'handler corrispondente in {Form}.Behavior.cs - altrimenti il
-            // metodo non esisterebbe ancora e la compilazione fallirebbe.
-            var onClick = control is { ControlType: "VbButton", HasClickHandler: true }
-                ? $" OnClick=\"{control.FieldName}_Click\""
+            // Modulo 9 (generalizzato): il markup collega l'evento solo se e' di tipo
+            // "WireInMarkup" (es. VbButton.OnClick, un EventCallback) e il doppio click ha
+            // gia' generato l'handler in {Form}.Behavior.cs - altrimenti il metodo non
+            // esisterebbe ancora e la compilazione fallirebbe. Gli eventi code-behind (es.
+            // VbTimer.Tick) vengono collegati in GenerateDesignerCs, non qui.
+            var eventInfo = ComponentEventInfo.For(control.ControlType);
+            var eventAttribute = eventInfo is { WireInMarkup: true } && control.HasEventHandler
+                ? $" {eventInfo.EventName}=\"{control.FieldName}{eventInfo.MethodSuffix}\""
                 : string.Empty;
-            sb.AppendLine($"    <{control.ControlType} Visual=\"{control.FieldName}\"{onClick} />");
+            sb.AppendLine($"    <{control.ControlType} Visual=\"{control.FieldName}\"{eventAttribute} />");
         }
         sb.AppendLine("</div>");
         sb.AppendLine("</CascadingValue>");
@@ -100,6 +103,26 @@ public static class FormCodeGenerator
             sb.AppendLine("    };");
             sb.AppendLine();
         }
+
+        // Eventi code-behind (es. VbTimer.Tick, un vero event .NET sull'istanza "Visual",
+        // a differenza di VbButton.OnClick che e' un parametro Blazor collegato nel .razor):
+        // tutti quelli attivi per questo form condividono un solo OnInitialized generato.
+        var codeBehindWiring = controls
+            .Select(c => (Control: c, Info: ComponentEventInfo.For(c.ControlType)))
+            .Where(x => x is { Info.WireInMarkup: false, Control.HasEventHandler: true })
+            .ToList();
+
+        if (codeBehindWiring.Count > 0)
+        {
+            sb.AppendLine("    protected override void OnInitialized()");
+            sb.AppendLine("    {");
+            sb.AppendLine("        base.OnInitialized();");
+            foreach (var (control, info) in codeBehindWiring)
+                sb.AppendLine($"        {control.FieldName}.{info!.EventName} += {control.FieldName}{info.MethodSuffix};");
+            sb.AppendLine("    }");
+            sb.AppendLine();
+        }
+
         sb.AppendLine("}");
 
         return sb.ToString();

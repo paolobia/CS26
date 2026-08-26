@@ -3,6 +3,9 @@ obj/
 .vs/
 *.user
 
+# Output di scripts/publish-*.{sh,ps1}: artefatti di build, non asset del repo.
+dist/
+
 # Output del designer (modulo 7): rigenerato ad ogni sessione di Ide.App, non e' un
 # asset del template ma un artefatto locale di prova/uso del designer.
 templates/BlazorPwaTemplate/Pages/DesignerForm.razor

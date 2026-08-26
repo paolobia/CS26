@@ -61,6 +61,9 @@ public sealed class ComponentPluginLoader : IDisposable
         // ecc.) non troverebbero quei tipi fra i riferimenti disponibili.
         EnsureAssemblyLoaded("VbControls.Abstractions.dll");
         EnsureAssemblyLoaded("VbControls.dll");
+        // Non fa parte della shared framework (e' un pacchetto NuGet): senza questo, un
+        // plugin che referenzia IJSRuntime (es. VbLocalStorage) non troverebbe il tipo.
+        EnsureAssemblyLoaded("Microsoft.JSInterop.dll");
 
         var sourceFiles = Directory.GetFiles(componentsDirectory, "*.cs", SearchOption.AllDirectories);
         if (sourceFiles.Length == 0)
