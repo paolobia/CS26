@@ -9,6 +9,14 @@ Per la progettazione completa (perché queste scelte, come funziona il generator
 codice, l'architettura a plugin dei componenti, ecc.) vedi **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 Questo README copre solo "cosa serve" e "come si prova".
 
+## Download rapido (consigliato — nessuna compilazione necessaria)
+
+**[⬇️ Scarica l'ultima release](https://github.com/paolobia/CS26/releases/latest)** —
+pacchetto già compilato per Linux o Windows: estrai lo zip e avvia l'eseguibile incluso.
+Contiene l'IDE, il progetto template, gli esempi e la documentazione. Vedi il README
+dentro lo zip per i dettagli. Le sezioni sotto servono solo se vuoi compilare da sorgente
+(per contribuire, o per verificare/modificare il codice dell'IDE stesso).
+
 ## Cosa serve (prerequisiti)
 
 - **.NET 8 SDK** (versione fissata in `global.json`).
