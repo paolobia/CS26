@@ -19,11 +19,13 @@
   <!--
     VbControls/VbControls.Abstractions non hanno un .csproj proprio: sono cartelle di sole
     sorgenti, incluse qui via glob (stessa copia indipendente usata da BlazorPwaTemplate:
-    vedi il commento li' per la motivazione).
+    vedi il commento li' per la motivazione, incluso il RazorComponent per i controlli
+    comuni in VbControls\Components\*.razor).
   -->
   <ItemGroup>
     <Compile Include="..\..\src\VbControls\**\*.cs" LinkBase="VbControls" />
     <Compile Include="..\..\src\VbControls.Abstractions\**\*.cs" LinkBase="VbControls.Abstractions" />
+    <RazorComponent Include="..\..\src\VbControls\Components\**\*.razor" LinkBase="Components" />
   </ItemGroup>
 
 </Project>

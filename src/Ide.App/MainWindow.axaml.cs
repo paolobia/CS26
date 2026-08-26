@@ -158,13 +158,17 @@ public partial class MainWindow : Window
     // Modulo 14 (sezione 2.2 di ARCHITECTURE.md): compila via Roslyn i componenti trovati
     // in {ProjectDir}/Components/ e ripopola la Toolbox. Un componente rotto viene
     // segnalato in Output e semplicemente escluso, non blocca l'IDE ne' gli altri.
+    // I controlli comuni (VbButton, VbLabel, ...) vivono in src/VbControls/Components/,
+    // condivisi fra tutti i progetti: vanno compilati insieme a quelli del progetto aperto,
+    // cosi' sono sempre disponibili anche se il progetto non li duplica localmente.
     private void LoadComponents()
     {
         if (_projectDirectory is null)
             return;
 
         var componentsDirectory = Path.Combine(_projectDirectory, "Components");
-        var errors = _componentLoader.Load(componentsDirectory);
+        var commonComponentsDirectory = Path.Combine(FindRepoRoot(), "src", "VbControls", "Components");
+        var errors = _componentLoader.Load(componentsDirectory, commonComponentsDirectory);
         foreach (var error in errors)
             AppendOutput($"[Components] {error}");
 

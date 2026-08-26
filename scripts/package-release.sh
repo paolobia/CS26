@@ -22,6 +22,16 @@ package_platform() {
     local pkg_dir="$OUT_ROOT/$pkg_name"
 
     echo "== Pubblico Ide.App per $rid =="
+    # NIENTE -p:PublishSingleFile: testato e verificato che rompe completamente
+    # ComponentPluginLoader. In single-file, self-contained bundla anche il runtime .NET
+    # stesso nell'eseguibile: Assembly.Location ritorna stringa vuota per QUALUNQUE assembly
+    # incorporato (non solo VbControls/Ide.Designer - anche System.Private.CoreLib e tutto
+    # il resto), quindi Directory.GetFiles(RuntimeEnvironment.GetRuntimeDirectory(), ...) e
+    # AppDomain.CurrentDomain.GetAssemblies().Select(a => a.Location) non producono piu'
+    # alcun riferimento valido per Roslyn: la compilazione di Components/*.cs fallisce
+    # perfino su "System" (verificato: 256 errori, 0 componenti caricati). Restare su una
+    # cartella self-contained "sciolta" e' l'unica opzione finche' ComponentPluginLoader
+    # dipende da percorsi fisici di assembly per le MetadataReference.
     dotnet publish src/Ide.App/Ide.App.csproj -c Release -r "$rid" --self-contained true -o "$pkg_dir"
 
     echo "== Copio template e progetti di esempio (sorgente) =="

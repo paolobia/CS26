@@ -42,17 +42,27 @@ public sealed class ComponentPluginLoader : IDisposable
     public IReadOnlyList<DiscoveredComponent> Components { get; private set; } = [];
 
     /// <summary>
-    /// Ricompila da zero i componenti in <paramref name="componentsDirectory"/> (se
-    /// esisteva un caricamento precedente, lo scarica prima - supporta "Reload
-    /// Components" senza riavviare l'IDE). Un file che non compila viene segnalato negli
-    /// errori restituiti e i suoi tipi vengono semplicemente esclusi: un plugin rotto non
-    /// deve bloccare l'avvio dell'IDE ne' gli altri componenti gia' funzionanti.
+    /// Ricompila da zero i componenti trovati in <paramref name="componentsDirectories"/>
+    /// (se esisteva un caricamento precedente, lo scarica prima - supporta "Reload
+    /// Components" senza riavviare l'IDE). Piu' cartelle vengono compilate insieme in
+    /// un'unica <see cref="CSharpCompilation"/> - tipicamente quella del progetto aperto
+    /// piu' quella dei controlli comuni condivisi (<c>src/VbControls/Components</c>), cosi'
+    /// i controlli comuni sono sempre disponibili indipendentemente dal progetto. Una
+    /// cartella inesistente viene semplicemente ignorata. Un file che non compila viene
+    /// segnalato negli errori restituiti e i suoi tipi vengono semplicemente esclusi: un
+    /// plugin rotto non deve bloccare l'avvio dell'IDE ne' gli altri componenti gia'
+    /// funzionanti.
     /// </summary>
-    public IReadOnlyList<string> Load(string componentsDirectory)
+    public IReadOnlyList<string> Load(params string[] componentsDirectories)
     {
         Unload();
 
-        if (!Directory.Exists(componentsDirectory))
+        var sourceFiles = componentsDirectories
+            .Where(Directory.Exists)
+            .SelectMany(dir => Directory.GetFiles(dir, "*.cs", SearchOption.AllDirectories))
+            .ToArray();
+
+        if (sourceFiles.Length == 0)
             return [];
 
         // VbControls/VbControls.Abstractions non sono piu' DLL a se stanti (sono sorgenti
@@ -62,10 +72,6 @@ public sealed class ComponentPluginLoader : IDisposable
         // shared framework: senza questo, un plugin che referenzia IJSRuntime (es.
         // VbLocalStorage) non troverebbe il tipo.
         EnsureAssemblyLoaded("Microsoft.JSInterop.dll");
-
-        var sourceFiles = Directory.GetFiles(componentsDirectory, "*.cs", SearchOption.AllDirectories);
-        if (sourceFiles.Length == 0)
-            return [];
 
         var syntaxTrees = sourceFiles
             .Select(path => CSharpSyntaxTree.ParseText(File.ReadAllText(path), path: path))

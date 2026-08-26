@@ -71,4 +71,36 @@ public class ComponentPluginLoaderTests
         public LayoutBox LayoutBox { get; set; } = new();
         public IDictionary<string, object?> Properties { get; } = new Dictionary<string, object?>();
     }
+
+    [Fact]
+    public void Componenti_reali_del_template_compilano_senza_errori()
+    {
+        // Regressione: v0.2.1 ha rimosso VbControls.csproj (che referenziava
+        // Microsoft.AspNetCore.Components.Web) senza accorgersi che il suo unico effetto
+        // reale era far copiare Microsoft.JSInterop.dll nell'output - senza quel file,
+        // VbLocalStorageVisual.cs (che usa IJSRuntime) non compilava, e poiche' tutti i file
+        // di Components/ vengono compilati in un'unica CSharpCompilation, l'intera Toolbox
+        // restava vuota (non solo il componente rotto). Questo test compila le stesse due
+        // cartelle che MainWindow.LoadComponents() passa a Load() (progetto + controlli
+        // comuni condivisi) e verifica che TUTTI i controlli comuni carichino.
+        var repoRoot = TrovaRepoRoot();
+        var componentsDirectory = Path.Combine(repoRoot, "templates", "BlazorPwaTemplate", "Components");
+        var commonComponentsDirectory = Path.Combine(repoRoot, "src", "VbControls", "Components");
+
+        using var loader = new ComponentPluginLoader();
+        var errori = loader.Load(componentsDirectory, commonComponentsDirectory);
+
+        Assert.Empty(errori);
+        Assert.Equal(7, loader.Components.Count);
+    }
+
+    private static string TrovaRepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "IdeSolution.sln")))
+            dir = dir.Parent;
+
+        return dir?.FullName
+            ?? throw new InvalidOperationException($"IdeSolution.sln non trovato risalendo da {AppContext.BaseDirectory}.");
+    }
 }

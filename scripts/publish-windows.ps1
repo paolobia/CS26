@@ -2,12 +2,14 @@
 # macchina di destinazione, solo il runtime WebView2 - vedi README.md, di norma gia'
 # preinstallato su Windows 10 21H2+/11).
 #
-# NOTA: niente -p:PublishSingleFile. Il ComponentPluginLoader (modulo 14) cerca
-# VbControls.dll/VbControls.Abstractions.dll come file fisici accanto all'eseguibile per
-# referenziarli nella compilazione Roslyn dei componenti-plugin; in modalita' single-file
-# quegli assembly verrebbero incorporati nell'eseguibile e non piu' presenti su disco,
-# facendo fallire silenziosamente il caricamento dei plugin. Una cartella con i file
-# sciolti (identica nella forma a bin/Debug/net8.0/ gia' usata in sviluppo) evita il problema.
+# NOTA: niente -p:PublishSingleFile qui (a differenza di scripts/package-release.sh, usato
+# per gli zip di release). Questo script serve per una publish locale rapida stile
+# bin/Debug/net8.0/ (cartella con i file sciolti) - piu' comodo per iterare/debuggare sulla
+# build Release senza gestire l'estrazione delle librerie native che il single-file richiede.
+# VbControls/VbControls.Abstractions non sono piu' DLL a se stanti dalla v0.2.1 (sono
+# sorgenti incluse in Ide.Designer); l'unico file che ComponentPluginLoader cerca ancora
+# come fisico accanto all'eseguibile e' Microsoft.JSInterop.dll (vedi Ide.App.csproj,
+# target KeepPluginAssembliesOutOfSingleFile).
 Set-Location (Join-Path $PSScriptRoot "..")
 
 $Rid = "win-x64"
