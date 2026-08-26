@@ -1,14 +1,14 @@
+@namespace VbControls
+
 @if (IsDesignMode)
 {
-    <div style="@Style" title="@($"{Visual.Id} ({Visual.BaseAddress})")">🌐</div>
+    <div style="@Style" title="@Visual.Id">⏱️</div>
 }
 
 @code {
     [Parameter, EditorRequired]
-    public VbHttpClientVisual Visual { get; set; } = null!;
+    public VbTimerVisual Visual { get; set; } = null!;
 
-    // Impostato una sola volta dal Form generato (CascadingValue), letto da
-    // NavigationManager.Uri: primo consumatore reale del flag ?design=true (modulo 10).
     [CascadingParameter]
     public bool IsDesignMode { get; set; }
 

@@ -24,6 +24,9 @@
                 <MenuItem Header="_Toolbox" />
                 <MenuItem Header="_Properties" />
                 <MenuItem Header="_Output" />
+                <Separator />
+                <!-- Modulo 14: ricompila Components/ senza riavviare l'IDE. -->
+                <MenuItem Header="_Reload Components" Click="OnReloadComponentsClicked" />
             </MenuItem>
             <MenuItem Header="_Run">
                 <MenuItem Header="_Start (F5)" Click="OnRunMenuClicked" />
@@ -42,16 +45,12 @@
             </DockPanel>
         </Border>
 
-        <!-- Toolbox a sinistra: controlli trascinabili verso la superficie di design -->
+        <!-- Toolbox a sinistra: popolata dinamicamente dal modulo 14 (ComponentPluginLoader)
+             a partire dai componenti trovati in {ProjectDir}/Components/, non piu' hardcoded. -->
         <Border DockPanel.Dock="Left" Width="180" BorderBrush="Gray" BorderThickness="0,0,1,0">
             <DockPanel Margin="4">
                 <TextBlock DockPanel.Dock="Top" Text="Toolbox" FontWeight="Bold" Margin="4" />
-                <ListBox x:Name="ToolboxList" SelectionMode="Single" Background="Transparent">
-                    <ListBoxItem x:Name="ToolboxButtonItem" Tag="VbButton">Button</ListBoxItem>
-                    <ListBoxItem x:Name="ToolboxLabelItem" Tag="VbLabel">Label</ListBoxItem>
-                    <ListBoxItem x:Name="ToolboxTextBoxItem" Tag="VbTextBox">TextBox</ListBoxItem>
-                    <ListBoxItem x:Name="ToolboxHttpClientItem" Tag="VbHttpClient">🌐 HttpClient (non-visuale)</ListBoxItem>
-                </ListBox>
+                <ListBox x:Name="ToolboxList" SelectionMode="Single" Background="Transparent" />
             </DockPanel>
         </Border>
 

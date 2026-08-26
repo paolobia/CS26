@@ -113,9 +113,11 @@ public static class FormCodeGenerator
         null => "null",
         string s => "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"",
         bool b => b ? "true" : "false",
+        int i => i.ToString(CultureInfo.InvariantCulture),
         double d => EmitDouble(d),
         _ => throw new NotSupportedException(
-            $"FormCodeGenerator non sa serializzare un valore di tipo {value.GetType()}."),
+            $"FormCodeGenerator non sa serializzare un valore di tipo {value.GetType()} " +
+            "(tipi supportati per [VisualProperty]: string, bool, int, double)."),
     };
 
     private static string EmitDouble(double value) => value.ToString(CultureInfo.InvariantCulture);

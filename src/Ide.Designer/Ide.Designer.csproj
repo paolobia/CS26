@@ -4,6 +4,11 @@
     <ProjectReference Include="..\VbControls.Abstractions\VbControls.Abstractions.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Modulo 14: compilazione in memoria dei componenti-plugin da Components/. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>

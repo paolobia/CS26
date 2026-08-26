@@ -1,3 +1,6 @@
+using System;
+using System.Net.Http;
+using System.Threading.Tasks;
 using VbControls.Abstractions;
 
 namespace VbControls;
@@ -6,10 +9,13 @@ namespace VbControls;
 /// Aspetto/configurazione di un VbHttpClient (posseduto dal designer). L'HttpClient vero
 /// e proprio viene creato pigramente solo quando serve (<see cref="GetStringAsync"/>):
 /// l'istanza usata dal designer per la Property Grid e il generatore di codice non apre
-/// mai connessioni di rete.
+/// mai connessioni di rete. Modulo 14: vive come sorgente in Components/.
 /// </summary>
+[ToolboxComponent("HttpClient", "🌐", "Non-visuali")]
 public sealed class VbHttpClientVisual : NonVisualComponentBase
 {
+    public VbHttpClientVisual() => LayoutBox = new LayoutBox { Width = 32, Height = 32 };
+
     [VisualProperty("Dati")]
     public string BaseAddress { get; set; } = string.Empty;
 

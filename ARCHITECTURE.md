@@ -48,9 +48,24 @@ Decisione di design a lungo termine, discussa esplicitamente con l'utente: esten
 
 **I riferimenti incrociati fra componenti funzionano già, senza plumbing aggiuntiva.** Sia i componenti visuali sia quelli non-visuali diventano campi della stessa partial class generata (`{Form}.razor.designer.cs` + `{Form}.Behavior.cs`, vincolo n.3): un handler come `Button1_Click` può chiamare direttamente `HttpClient1.GetAsync(...)`, perché sono entrambi campi della stessa classe. Non ovvio finché non lo si nota esplicitamente.
 
-**Toolbox futura.** Con più tipi di componenti la Toolbox oggi hardcoded in XAML (`MainWindow.axaml`, 3 `ListBoxItem` fissi) non scala. Direzione naturale (non un impegno immediato): popolarla via reflection sugli assembly `VbControls*`, cercando tipi decorati con un futuro attributo `[ToolboxComponent(Icon, Category, DisplayName)]`.
+**Toolbox dinamica**: realizzata nel modulo 14 (sezione 2.2) — non piu' hardcoded in XAML.
 
-**Esempi di componenti non-visuali candidati**, coerenti col vincolo n.6 (tutto client-side): `VbHttpClient` (chiamate a API esterne dalla WASM), `VbLocalStorage`/`VbIndexedDb` (wrapper su JS interop), `VbTimer`. Solo esempi guida, non un impegno a implementarli subito — si veda modulo 13 in sezione 5.
+**Esempi di componenti non-visuali candidati**, coerenti col vincolo n.6 (tutto client-side): `VbHttpClient` (implementato, chiamate a API esterne dalla WASM), `VbTimer` (implementato, di prova), `VbLocalStorage`/`VbIndexedDb` (wrapper su JS interop - non ancora implementati).
+
+## 2.2. Componenti come plugin caricati a runtime da sorgente (2026-08-26)
+
+Modulo 14. Decisione di design a lungo termine: i componenti — built-in e utente — sono descritti da **file C# in una cartella**, letti a runtime all'avvio dell'IDE, senza dover toccare né ricompilare `Ide.App`. Tutti i componenti (`VbButton`, `VbLabel`, `VbTextBox`, `VbHttpClient`) sono migrati a questo meccanismo: non esiste piu' un percorso "built-in" separato da uno "plugin utente", sono la stessa cosa.
+
+**Il problema centrale**: un componente deve "vivere" in due runtime diversi — il processo desktop di `Ide.App` (per Toolbox/Property Grid/generatore) e l'app Blazor WASM reale mostrata nella WebView (vincolo n.1). La soluzione adottata sfrutta un'osservazione chiave: `Ide.App` non renderizza mai Blazor, gli serve solo la classe C# "aspetto" (`IDesignComponent`) per riflettervi sopra — il `.razor` serve solo al runtime reale.
+
+- **Cartella dei componenti: `{ProjectDir}/Components/`** (oggi `templates/BlazorPwaTemplate/Components/`, non alla radice del repo — generalizza bene al giorno in cui l'IDE apre progetti arbitrari). Essendo dentro l'albero del progetto Blazor, `.cs` e `.razor` messi li' sono automaticamente inclusi dalla build standard (stessi glob impliciti di `Pages/`/`Shared/`): `dotnet watch` li ricompila senza alcun wiring MSBuild aggiuntivo.
+- **Stesso identico file sorgente, compilato due volte** da due compilatori per due scopi diversi: il build normale del progetto (SDK Razor/C#) per il runtime reale; `Ide.Designer.ComponentPluginLoader` (Roslyn, in memoria) per il design-time di `Ide.App` — solo i `.cs`, mai i `.razor`.
+- **`[ToolboxComponent(DisplayName, Icon, Category)]`** (`VbControls.Abstractions`): il "manifest" richiesto, come attributo sul codice stesso — niente file di manifest separato (coerente col vincolo n.4). Letto via reflection per popolare la Toolbox.
+- **Convenzione di naming**: il tag del markup generato e' il nome della classe "Visual" senza il suffisso `Visual` (`VbButtonVisual` -> `<VbButton>`) — nessuna configurazione aggiuntiva da scrivere.
+- **`ComponentPluginLoader`** (`src/Ide.Designer/ComponentPluginLoader.cs`): compila `Components/*.cs` con `Microsoft.CodeAnalysis.CSharp`, referenziando l'intera shared framework (`RuntimeEnvironment.GetRuntimeDirectory()`) piu' gli assembly gia' caricati nel processo (per garantire la stessa identita' di tipo di `IDesignComponent` ecc. - vedi sotto). Carica il risultato in un `AssemblyLoadContext` **collezionabile** che delega sempre la risoluzione dei riferimenti al contesto di default (`Load(AssemblyName) => null`): senza questo, i tipi caricati dinamicamente sarebbero copie distinte con identita' diversa, e `IsAssignableFrom`/i cast fallirebbero silenziosamente. Un file che non compila viene segnalato in Output e i suoi tipi esclusi — un plugin rotto non blocca l'IDE ne' gli altri componenti.
+- **Comando "Reload Components"** (menu View): scarica il contesto precedente e ricompila da zero, per iterare su un componente senza riavviare l'IDE.
+- **Resilienza**: il generatore di codice (`FormCodeGenerator`) non deve mai far crashare l'IDE per un tipo di proprieta' non ancora supportato — un errore di serializzazione si segnala in Output, non termina il processo.
+- **Nota di fiducia**: caricare ed eseguire sorgente arbitrario da una cartella e' "trusted code execution" — accettabile perche' e' codice dell'utente sulla propria macchina (stesso modello delle macro VB6/VBA), non un plugin store di terze parti.
 
 ## 3. Struttura repository (fissata, non improvvisare nomi diversi)
 
@@ -61,10 +76,11 @@ Decisione di design a lungo termine, discussa esplicitamente con l'utente: esten
   /src
     /Ide.App               → Avalonia UI, entry point IDE
     /Ide.Designer           → logica designer, JS interop, generatore codice
-    /VbControls              → libreria Blazor riusabile (VbButton, VbTextBox, ...)
-    /VbControls.Abstractions → IVisualComponent, ComponentBehavior<T>, attributi
+    /VbControls              → classi base condivise (VisualComponentBase, NonVisualComponentBase)
+    /VbControls.Abstractions → IDesignComponent, IVisualComponent, INonVisualComponent, ComponentBehavior<T>, attributi
   /templates
-    /BlazorPwaTemplate       → template progetto Blazor WASM PWA vuoto
+    /BlazorPwaTemplate       → template progetto Blazor WASM PWA
+      /Components            → modulo 14: componenti come plugin (VbButton, VbLabel, VbTextBox, VbHttpClient, VbTimer, ...), compilati sia dal build normale sia da Ide.Designer via Roslyn
   /samples
     /HelloWorldApp           → primo progetto generato di prova
   IdeSolution.sln
@@ -75,7 +91,8 @@ Decisione di design a lungo termine, discussa esplicitamente con l'utente: esten
 - .NET 8 SDK (fissare versione esatta in `global.json`)
 - Avalonia UI 11.x per l'IDE
 - AvaloniaEdit per l'editor codice
-- Microsoft.CodeAnalysis (Roslyn) per parsing/diagnostica del codice Behavior
+- Microsoft.CodeAnalysis.CSharp (Roslyn, `4.14.0`) — parsing/diagnostica del codice Behavior, e dal modulo 14 anche compilazione in memoria dei componenti-plugin in `Components/` (`Ide.Designer.ComponentPluginLoader`)
+- `System.Runtime.Loader.AssemblyLoadContext` collezionabile — carica/scarica i componenti-plugin senza riavviare l'IDE (comando "Reload Components")
 - WebView: **`Avalonia.Controls.WebView` (pacchetto ufficiale AvaloniaUI OÜ), versione `12.1.0`** — validato in Fase 0 (2026-08-25).
   - Motivazione della scelta rispetto alle alternative valutate:
     - `WebView.Avalonia` (MicroSugarDeveloperOrg): community, ferma alla 11.0.0.1, poco manutenuta.
@@ -107,6 +124,7 @@ Decisione di design a lungo termine, discussa esplicitamente con l'utente: esten
 11. Debug
 12. Build/Publish/Distribuzione PWA
 13. Componenti non-visuali: `IDesignComponent`/`INonVisualComponent` (sezione 2.1) + primo componente di esempio (`VbHttpClient`) + Toolbox estesa via reflection
+14. Componenti come plugin caricati a runtime (sezione 2.2): `ComponentPluginLoader` (Roslyn + `AssemblyLoadContext`), attributo `[ToolboxComponent]`, Toolbox dinamica, comando Reload Components, migrazione di tutti i componenti in `Components/`
 
 ## 6. Criteri generali di accettazione
 

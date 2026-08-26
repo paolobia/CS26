@@ -7,7 +7,6 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
 using Ide.Designer;
-using VbControls;
 using VbControls.Abstractions;
 
 namespace Ide.App;
@@ -17,16 +16,9 @@ public partial class MainWindow : Window
     private const string FormName = "DesignerForm";
     private const string FormNamespace = "BlazorPwaTemplate.Pages";
 
-    private static readonly IReadOnlyDictionary<string, (double Width, double Height)> DefaultSizeByControlType =
-        new Dictionary<string, (double, double)>
-        {
-            ["VbButton"] = (120, 32),
-            ["VbLabel"] = (150, 24),
-            ["VbTextBox"] = (200, 28),
-            ["VbHttpClient"] = (32, 32), // modulo 13: dimensione della sola icona di design
-        };
-
     private readonly DotnetWatchHost _watchHost = new();
+    private readonly ComponentPluginLoader _componentLoader = new();
+    private readonly Dictionary<string, Type> _componentTypesByControlType = new();
     private readonly List<PlacedControl> _placedControls = [];
     private readonly Dictionary<string, int> _fieldCounters = new();
 
@@ -44,7 +36,11 @@ public partial class MainWindow : Window
         DesignerWebView.NavigationCompleted += (_, e) =>
             Console.WriteLine($"[DesignerWebView] NavigationCompleted: {e.Request}");
 
-        Closed += (_, _) => _watchHost.Dispose();
+        Closed += (_, _) =>
+        {
+            _watchHost.Dispose();
+            _componentLoader.Dispose();
+        };
         // Rete di sicurezza: se il processo termina senza passare da una chiusura pulita
         // della finestra (crash, kill del processo), evita comunque di lasciare orfano
         // il processo figlio `dotnet watch`.
@@ -58,12 +54,6 @@ public partial class MainWindow : Window
         DesignSurface.AddHandler(DragDrop.DragOverEvent, OnDesignSurfaceDragOver);
         DesignSurface.AddHandler(DragDrop.DropEvent, OnDesignSurfaceDrop);
 
-        // ListBoxItem consuma il PointerPressed per la selezione (Handled = true) prima
-        // che un handler XAML ordinario venga invocato: serve handledEventsToo per
-        // intercettarlo comunque e avviare il drag.
-        foreach (var item in new[] { ToolboxButtonItem, ToolboxLabelItem, ToolboxTextBoxItem, ToolboxHttpClientItem })
-            item.AddHandler(PointerPressedEvent, OnToolboxItemPointerPressed, handledEventsToo: true);
-
         // Modulo 10: F5 = Run, esce dalla modalita' di design (vincolo architetturale n.5:
         // design mode e run mode sono lo stesso bundle, pilotato da un flag in query string).
         KeyDown += async (_, e) =>
@@ -74,6 +64,36 @@ public partial class MainWindow : Window
 
         _ = StartDesignerAsync();
     }
+
+    // Modulo 14 (sezione 2.2 di ARCHITECTURE.md): compila via Roslyn i componenti trovati
+    // in {ProjectDir}/Components/ e ripopola la Toolbox. Un componente rotto viene
+    // segnalato in Output e semplicemente escluso, non blocca l'IDE ne' gli altri.
+    private void LoadComponents()
+    {
+        if (_projectDirectory is null)
+            return;
+
+        var componentsDirectory = Path.Combine(_projectDirectory, "Components");
+        var errors = _componentLoader.Load(componentsDirectory);
+        foreach (var error in errors)
+            AppendOutput($"[Components] {error}");
+
+        ToolboxList.Items.Clear();
+        _componentTypesByControlType.Clear();
+
+        foreach (var component in _componentLoader.Components.OrderBy(c => c.Category).ThenBy(c => c.DisplayName))
+        {
+            _componentTypesByControlType[component.ControlType] = component.VisualType;
+
+            var item = new ListBoxItem { Tag = component.ControlType, Content = $"{component.Icon} {component.DisplayName}" };
+            item.AddHandler(PointerPressedEvent, OnToolboxItemPointerPressed, handledEventsToo: true);
+            ToolboxList.Items.Add(item);
+        }
+
+        AppendOutput($"Componenti caricati da Components/: {string.Join(", ", _componentTypesByControlType.Keys)}");
+    }
+
+    private void OnReloadComponentsClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => LoadComponents();
 
     // Modulo 6: avvio del drag da un elemento della Toolbox. Nessuna persistenza su file
     // ancora (quella e' il modulo 7, il generatore di codice): qui si trasporta solo il
@@ -114,17 +134,14 @@ public partial class MainWindow : Window
         }
 
         var position = e.GetPosition(DesignSurface);
-        var (width, height) = DefaultSizeByControlType[controlType];
         var fieldName = NextFieldName(controlType);
 
+        // Le dimensioni di default vengono dal costruttore del componente stesso (ogni
+        // Visual imposta la propria LayoutBox di default): il designer sa solo dove e'
+        // stato rilasciato, non quanto deve essere grande.
         var visual = CreateVisual(controlType);
-        visual.LayoutBox = new LayoutBox
-        {
-            X = Math.Max(0, position.X - width / 2),
-            Y = Math.Max(0, position.Y - height / 2),
-            Width = width,
-            Height = height,
-        };
+        visual.LayoutBox.X = Math.Max(0, position.X - visual.LayoutBox.Width / 2);
+        visual.LayoutBox.Y = Math.Max(0, position.Y - visual.LayoutBox.Height / 2);
 
         var placed = new PlacedControl(fieldName, controlType, visual);
         _placedControls.Add(placed);
@@ -137,14 +154,15 @@ public partial class MainWindow : Window
         await RegenerateAndReloadAsync();
     }
 
-    private static IDesignComponent CreateVisual(string controlType) => controlType switch
+    // Modulo 14: il tipo concreto non e' piu' noto a compile-time di Ide.App - viene
+    // istanziato per reflection a partire da quanto scoperto in Components/.
+    private IDesignComponent CreateVisual(string controlType)
     {
-        "VbButton" => new VbButtonVisual(),
-        "VbLabel" => new VbLabelVisual(),
-        "VbTextBox" => new VbTextBoxVisual(),
-        "VbHttpClient" => new VbHttpClientVisual(), // modulo 13: primo componente non-visuale
-        _ => throw new NotSupportedException($"Tipo di controllo sconosciuto: {controlType}"),
-    };
+        if (!_componentTypesByControlType.TryGetValue(controlType, out var type))
+            throw new NotSupportedException($"Tipo di controllo sconosciuto: {controlType}");
+
+        return (IDesignComponent)Activator.CreateInstance(type)!;
+    }
 
     private string NextFieldName(string controlType)
     {
@@ -246,10 +264,22 @@ public partial class MainWindow : Window
         }
     }
 
+    // Un componente (built-in o plugin) con una proprieta' che il generatore non sa
+    // ancora serializzare non deve far crashare l'IDE: si segnala in Output e si lascia
+    // il form nell'ultimo stato valido generato.
     private async Task RegenerateAndReloadAsync()
     {
-        var pagesDirectory = Path.Combine(_projectDirectory!, "Pages");
-        var (razorPath, designerCsPath) = FormCodeGenerator.Generate(pagesDirectory, FormName, FormNamespace, _placedControls);
+        string razorPath, designerCsPath;
+        try
+        {
+            var pagesDirectory = Path.Combine(_projectDirectory!, "Pages");
+            (razorPath, designerCsPath) = FormCodeGenerator.Generate(pagesDirectory, FormName, FormNamespace, _placedControls);
+        }
+        catch (Exception ex)
+        {
+            AppendOutput($"Errore nella generazione del form: {ex.Message}");
+            return;
+        }
 
         AppendOutput($"Generato -> {Path.GetFileName(razorPath)}, {Path.GetFileName(designerCsPath)}");
 
@@ -333,6 +363,7 @@ public partial class MainWindow : Window
     private async Task StartDesignerAsync()
     {
         _projectDirectory = Path.Combine(FindRepoRoot(), "templates", "BlazorPwaTemplate");
+        LoadComponents(); // solo file locali, non serve attendere che dotnet watch sia pronto
 
         try
         {
