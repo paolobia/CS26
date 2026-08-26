@@ -23,6 +23,7 @@ public partial class MainWindow : Window
             ["VbButton"] = (120, 32),
             ["VbLabel"] = (150, 24),
             ["VbTextBox"] = (200, 28),
+            ["VbHttpClient"] = (32, 32), // modulo 13: dimensione della sola icona di design
         };
 
     private readonly DotnetWatchHost _watchHost = new();
@@ -60,7 +61,7 @@ public partial class MainWindow : Window
         // ListBoxItem consuma il PointerPressed per la selezione (Handled = true) prima
         // che un handler XAML ordinario venga invocato: serve handledEventsToo per
         // intercettarlo comunque e avviare il drag.
-        foreach (var item in new[] { ToolboxButtonItem, ToolboxLabelItem, ToolboxTextBoxItem })
+        foreach (var item in new[] { ToolboxButtonItem, ToolboxLabelItem, ToolboxTextBoxItem, ToolboxHttpClientItem })
             item.AddHandler(PointerPressedEvent, OnToolboxItemPointerPressed, handledEventsToo: true);
 
         // Modulo 10: F5 = Run, esce dalla modalita' di design (vincolo architetturale n.5:
@@ -98,8 +99,9 @@ public partial class MainWindow : Window
 
     // Modulo 7: il drop genera davvero i due file posseduti dal designer
     // (DesignerForm.razor / DesignerForm.razor.designer.cs), a partire dall'istanza
-    // reale dell'aspetto (IVisualComponent) creata qui: e' la stessa istanza su cui la
-    // Property Grid (modulo 8) riflette per mostrarne ed editarne le proprieta'.
+    // reale dell'aspetto (IDesignComponent - visuale o non-visuale, modulo 13) creata
+    // qui: e' la stessa istanza su cui la Property Grid (modulo 8) riflette per
+    // mostrarne ed editarne le proprieta'.
     private async void OnDesignSurfaceDrop(object? sender, DragEventArgs e)
     {
         if (e.DataTransfer.TryGetText() is not { } controlType)
@@ -135,11 +137,12 @@ public partial class MainWindow : Window
         await RegenerateAndReloadAsync();
     }
 
-    private static IVisualComponent CreateVisual(string controlType) => controlType switch
+    private static IDesignComponent CreateVisual(string controlType) => controlType switch
     {
         "VbButton" => new VbButtonVisual(),
         "VbLabel" => new VbLabelVisual(),
         "VbTextBox" => new VbTextBoxVisual(),
+        "VbHttpClient" => new VbHttpClientVisual(), // modulo 13: primo componente non-visuale
         _ => throw new NotSupportedException($"Tipo di controllo sconosciuto: {controlType}"),
     };
 

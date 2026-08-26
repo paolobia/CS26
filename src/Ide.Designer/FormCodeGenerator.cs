@@ -12,6 +12,9 @@ namespace Ide.Designer;
 /// mai toccato da questa classe.
 /// Rigenera sempre l'intero contenuto a partire dal modello in memoria: e' sicuro perche'
 /// questi file non sono editati a mano.
+/// Modulo 13: i controlli possono essere visuali o non-visuali (sezione 2.1 di
+/// ARCHITECTURE.md) - il generatore tratta entrambi tramite <see cref="IDesignComponent"/>,
+/// senza bisogno di distinguerli esplicitamente.
 /// </summary>
 public static class FormCodeGenerator
 {
@@ -39,6 +42,10 @@ public static class FormCodeGenerator
         sb.AppendLine();
         sb.AppendLine($"<PageTitle>{formName}</PageTitle>");
         sb.AppendLine();
+        // CascadingValue distribuisce IsDesignMode a tutti i controlli, visuali e non-visuali:
+        // e' l'unico punto che legge l'URL, i componenti a valle si limitano a consumarlo
+        // (modulo 13 - primo uso reale del flag ?design=true introdotto nel modulo 10).
+        sb.AppendLine("<CascadingValue Value=\"IsDesignMode\">");
         sb.AppendLine("""<div style="position:relative;width:100%;height:600px;">""");
         foreach (var control in controls)
         {
@@ -51,6 +58,7 @@ public static class FormCodeGenerator
             sb.AppendLine($"    <{control.ControlType} Visual=\"{control.FieldName}\"{onClick} />");
         }
         sb.AppendLine("</div>");
+        sb.AppendLine("</CascadingValue>");
 
         return sb.ToString();
     }
@@ -62,6 +70,8 @@ public static class FormCodeGenerator
         sb.AppendLine("// Questo file e' generato dal designer di Ide.App. Non modificarlo a mano:");
         sb.AppendLine("// verra' sovrascritto ad ogni modifica del form nel designer.");
         sb.AppendLine("// </auto-generated>");
+        sb.AppendLine("using System;");
+        sb.AppendLine("using Microsoft.AspNetCore.Components;");
         sb.AppendLine("using VbControls;");
         sb.AppendLine("using VbControls.Abstractions;");
         sb.AppendLine();
@@ -69,6 +79,15 @@ public static class FormCodeGenerator
         sb.AppendLine();
         sb.AppendLine($"public partial class {formName}");
         sb.AppendLine("{");
+
+        // Modulo 13: IsDesignMode letto una sola volta qui e ridistribuito via
+        // CascadingValue nel .razor, invece che ogni componente rilegga l'URL per conto suo.
+        sb.AppendLine("    [Inject]");
+        sb.AppendLine("    protected NavigationManager NavigationManager { get; set; } = default!;");
+        sb.AppendLine();
+        sb.AppendLine("    protected bool IsDesignMode => NavigationManager.Uri.Contains(\"design=true\", StringComparison.OrdinalIgnoreCase);");
+        sb.AppendLine();
+
         foreach (var control in controls)
         {
             sb.AppendLine($"    protected {control.Visual.GetType().Name} {control.FieldName} {{ get; }} = new()");
@@ -105,12 +124,13 @@ public static class FormCodeGenerator
 /// <summary>
 /// Riflessione condivisa tra generatore di codice (modulo 7) e Property Grid (modulo 8)
 /// sulle proprieta' marcate <see cref="VisualPropertyAttribute"/>: e' cosi' che entrambi
-/// restano sempre d'accordo su cosa e' editabile per un dato controllo.
+/// restano sempre d'accordo su cosa e' editabile per un dato componente, visuale o no
+/// (modulo 13).
 /// </summary>
 public static class VisualPropertyReader
 {
-    public static IEnumerable<PropertyInfo> GetEditableProperties(IVisualComponent visual) =>
-        visual.GetType()
+    public static IEnumerable<PropertyInfo> GetEditableProperties(IDesignComponent component) =>
+        component.GetType()
             .GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Where(p => p.GetCustomAttribute<VisualPropertyAttribute>() is not null && p.CanRead && p.CanWrite);
 }

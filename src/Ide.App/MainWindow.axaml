@@ -50,6 +50,7 @@
                     <ListBoxItem x:Name="ToolboxButtonItem" Tag="VbButton">Button</ListBoxItem>
                     <ListBoxItem x:Name="ToolboxLabelItem" Tag="VbLabel">Label</ListBoxItem>
                     <ListBoxItem x:Name="ToolboxTextBoxItem" Tag="VbTextBox">TextBox</ListBoxItem>
+                    <ListBoxItem x:Name="ToolboxHttpClientItem" Tag="VbHttpClient">🌐 HttpClient (non-visuale)</ListBoxItem>
                 </ListBox>
             </DockPanel>
         </Border>
