@@ -567,12 +567,18 @@ public partial class MainWindow : Window
 
     private static string FindRepoRoot()
     {
+        // Pacchetto di release (scripts/package-release.sh): templates/ sta gia' accanto
+        // all'eseguibile, non c'e' nessun IdeSolution.sln nello zip scaricato dall'utente.
+        if (Directory.Exists(Path.Combine(AppContext.BaseDirectory, "templates", "BlazorPwaTemplate")))
+            return AppContext.BaseDirectory;
+
+        // Sviluppo: l'eseguibile sta in bin/Debug/net8.0/, risali fino alla radice della solution.
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "IdeSolution.sln")))
             dir = dir.Parent;
 
         return dir?.FullName
             ?? throw new InvalidOperationException(
-                $"Impossibile trovare IdeSolution.sln risalendo da {AppContext.BaseDirectory}.");
+                $"Impossibile trovare templates/BlazorPwaTemplate ne' accanto all'eseguibile ne' risalendo da {AppContext.BaseDirectory} fino a IdeSolution.sln.");
     }
 }
