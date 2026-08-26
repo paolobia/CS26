@@ -28,6 +28,7 @@ public partial class MainWindow : Window
     private bool _designerFormOpened;
     private string _currentPagePath = string.Empty; // "" = home, "designerform" = form generato
     private bool _isRunning;
+    private bool _publishInProgress;
 
     public MainWindow()
     {
@@ -438,6 +439,66 @@ public partial class MainWindow : Window
 
     private Uri BuildUri(Uri serverUri, bool design) =>
         new($"{serverUri}{_currentPagePath}{(design ? "?design=true" : string.Empty)}");
+
+    // Modulo 12: dotnet publish -c Release, isolato dall'intermediate directory di
+    // dotnet watch (vedi ProjectPublisher) cosi' da poter pubblicare senza fermare la
+    // sessione di design in corso. Verifica anche che l'output pubblicato contenga il
+    // manifest e il service worker: e' cio' che rende la PWA installabile.
+    private async void OnPublishClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (_projectDirectory is null)
+        {
+            AppendOutput("Publish ignorato: il progetto non e' ancora pronto.");
+            return;
+        }
+
+        if (_publishInProgress)
+        {
+            AppendOutput("Publish gia' in corso, attendi il completamento.");
+            return;
+        }
+
+        _publishInProgress = true;
+        PublishMenuItem.IsEnabled = false;
+        AppendOutput("Publish: avvio 'dotnet publish -c Release' (puo' richiedere qualche minuto)...");
+
+        try
+        {
+            // Output completo su file (puo' essere enorme per una solution intera in
+            // Release): il pannello Output riceve solo il riepilogo e le righe di errore.
+            var result = await ProjectPublisher.PublishAsync(_projectDirectory, TimeSpan.FromMinutes(5));
+
+            AppendOutput($"Log completo: {result.LogFilePath}");
+            foreach (var errorLine in result.ErrorLines.Take(20))
+                AppendOutput($"[publish] {errorLine}");
+            if (result.ErrorLines.Count > 20)
+                AppendOutput($"... altre {result.ErrorLines.Count - 20} righe con 'error': vedi il log completo.");
+
+            if (result.ExitCode != 0)
+            {
+                AppendOutput($"Publish fallito (exit code {result.ExitCode}).");
+                return;
+            }
+
+            var wwwrootPath = Path.Combine(_projectDirectory, ProjectPublisher.PublishOutputRelative, "wwwroot");
+            var hasManifest = File.Exists(Path.Combine(wwwrootPath, "manifest.webmanifest"));
+            var hasServiceWorker = File.Exists(Path.Combine(wwwrootPath, "service-worker.js"));
+
+            AppendOutput($"Publish completato -> {wwwrootPath}");
+            AppendOutput(hasManifest && hasServiceWorker
+                ? "PWA installabile: manifest.webmanifest e service-worker.js presenti nell'output."
+                : $"Attenzione: manifest={hasManifest}, service worker={hasServiceWorker} - verificare l'output pubblicato.");
+        }
+        catch (Exception ex)
+        {
+            AppendOutput($"Errore durante il publish: {ex.Message}");
+        }
+        finally
+        {
+            _publishInProgress = false;
+            PublishMenuItem.IsEnabled = true;
+        }
+    }
 
     private void AppendOutput(string line)
     {

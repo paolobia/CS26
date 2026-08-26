@@ -32,6 +32,10 @@
                 <MenuItem Header="_Start (F5)" Click="OnRunMenuClicked" />
                 <MenuItem Header="S_top" Click="OnStopMenuClicked" />
             </MenuItem>
+            <!-- Modulo 12: dotnet publish -c Release del progetto Blazor WASM PWA. -->
+            <MenuItem Header="_Build">
+                <MenuItem x:Name="PublishMenuItem" Header="_Publish PWA" Click="OnPublishClicked" />
+            </MenuItem>
             <!-- Modulo 11: DevTools nativi della WebView + inoltro console/errori JS in Output. -->
             <MenuItem Header="_Debug">
                 <MenuItem Header="_DevTools" Click="OnDevToolsMenuClicked" />
