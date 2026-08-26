@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -33,8 +35,39 @@ public partial class MainWindow : Window
 
         DesignerWebView.NavigationStarted += (_, e) =>
             Console.WriteLine($"[DesignerWebView] NavigationStarted: {e.Request}");
-        DesignerWebView.NavigationCompleted += (_, e) =>
+        DesignerWebView.NavigationCompleted += async (_, e) =>
+        {
             Console.WriteLine($"[DesignerWebView] NavigationCompleted: {e.Request}");
+            await InjectConsoleForwardingAsync();
+        };
+
+        // Modulo 11: abilita i DevTools nativi della WebView (WebKitGTK Inspector su
+        // Linux, WebView2 DevTools su Windows) - apribili con click destro > Ispeziona,
+        // o F12 dove il motore nativo lo supporta. Nessuna API cross-platform per
+        // "aprirli ora" da codice: EnableDevTools sblocca la voce nel menu contestuale
+        // nativo della WebView stessa.
+        DesignerWebView.EnvironmentRequested += (_, e) => e.EnableDevTools = true;
+
+        // Modulo 11: inoltra console.log/warn/error e gli errori JS non gestiti della
+        // pagina reale nel pannello Output, tramite lo stesso canale invokeCSharpAction
+        // gia' usato internamente da Avalonia.Controls.WebView per WebMessageReceived.
+        DesignerWebView.WebMessageReceived += (_, e) =>
+        {
+            if (e.Body is null)
+                return;
+
+            ConsoleMessage? message = null;
+            try
+            {
+                message = JsonSerializer.Deserialize<ConsoleMessage>(e.Body);
+            }
+            catch (JsonException)
+            {
+            }
+
+            Dispatcher.UIThread.Post(() => AppendOutput(
+                message is not null ? $"[console.{message.Level}] {message.Text}" : $"[console] {e.Body}"));
+        };
 
         Closed += (_, _) =>
         {
@@ -64,6 +97,61 @@ public partial class MainWindow : Window
 
         _ = StartDesignerAsync();
     }
+
+    // Modulo 11: script iniettato ad ogni navigazione per intercettare console.*, errori
+    // non gestiti e promise rifiutate, inoltrandoli all'host via invokeCSharpAction (la
+    // stessa funzione JS globale che Avalonia.Controls.WebView inietta gia' per il canale
+    // WebMessageReceived - non serve definirla noi).
+    private const string ConsoleForwardingScript = """
+        (function(){
+            if (window.__ideConsoleHooked) return 'already-hooked';
+            window.__ideConsoleHooked = true;
+
+            function send(level, text) {
+                try { invokeCSharpAction(JSON.stringify({ level: level, text: text })); } catch (e) {}
+            }
+
+            ['log', 'info', 'warn', 'error'].forEach(function (level) {
+                var original = console[level];
+                console[level] = function () {
+                    var text = Array.prototype.slice.call(arguments).map(function (a) {
+                        try { return typeof a === 'object' ? JSON.stringify(a) : String(a); }
+                        catch (e) { return String(a); }
+                    }).join(' ');
+                    send(level, text);
+                    original.apply(console, arguments);
+                };
+            });
+
+            window.addEventListener('error', function (ev) {
+                send('error', 'Uncaught: ' + ev.message + ' @ ' + ev.filename + ':' + ev.lineno);
+            });
+            window.addEventListener('unhandledrejection', function (ev) {
+                send('error', 'Unhandled promise rejection: ' + ev.reason);
+            });
+
+            return 'hooked';
+        })();
+        """;
+
+    private async Task InjectConsoleForwardingAsync()
+    {
+        try
+        {
+            await DesignerWebView.InvokeScript(ConsoleForwardingScript);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DesignerWebView] Impossibile agganciare la console: {ex.Message}");
+        }
+    }
+
+    private void OnDevToolsMenuClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e) =>
+        AppendOutput("DevTools abilitati: click destro sulla superficie di design > Ispeziona/Inspect Element (o F12 dove supportato dal motore nativo).");
+
+    private sealed record ConsoleMessage(
+        [property: JsonPropertyName("level")] string Level,
+        [property: JsonPropertyName("text")] string Text);
 
     // Modulo 14 (sezione 2.2 di ARCHITECTURE.md): compila via Roslyn i componenti trovati
     // in {ProjectDir}/Components/ e ripopola la Toolbox. Un componente rotto viene

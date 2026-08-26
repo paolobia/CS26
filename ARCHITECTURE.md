@@ -121,7 +121,7 @@ Modulo 14. Decisione di design a lungo termine: i componenti — built-in e uten
 8. Property Grid via reflection
 9. Doppio click → generazione handler in `.Behavior.cs`
 10. Run (F5) end-to-end
-11. Debug
+11. Debug: DevTools nativi della WebView (`EnableDevTools`, click destro > Ispeziona) + inoltro di `console.log/warn/error` ed errori JS non gestiti nel pannello Output, via lo stesso canale `invokeCSharpAction`/`WebMessageReceived` gia' usato dalla WebView
 12. Build/Publish/Distribuzione PWA
 13. Componenti non-visuali: `IDesignComponent`/`INonVisualComponent` (sezione 2.1) + primo componente di esempio (`VbHttpClient`) + Toolbox estesa via reflection
 14. Componenti come plugin caricati a runtime (sezione 2.2): `ComponentPluginLoader` (Roslyn + `AssemblyLoadContext`), attributo `[ToolboxComponent]`, Toolbox dinamica, comando Reload Components, migrazione di tutti i componenti in `Components/`
