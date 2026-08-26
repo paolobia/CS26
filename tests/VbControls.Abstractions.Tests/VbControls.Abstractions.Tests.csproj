@@ -23,7 +23,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\VbControls.Abstractions\VbControls.Abstractions.csproj" />
+    <!-- VbControls.Abstractions non ha piu' un .csproj proprio: i suoi tipi vivono ora
+         dentro Ide.Designer (sorgenti incluse via glob, vedi Ide.Designer.csproj). -->
+    <ProjectReference Include="..\..\src\Ide.Designer\Ide.Designer.csproj" />
   </ItemGroup>
 
 </Project>

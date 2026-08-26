@@ -21,17 +21,19 @@
 
   <!--
     Il ComponentPluginLoader (Ide.Designer) compila i componenti-plugin con Roslyn
-    referenziando VbControls.dll/VbControls.Abstractions.dll/Microsoft.JSInterop.dll come
-    FILE FISICI accanto all'eseguibile (Assembly.LoadFrom + MetadataReference.CreateFromFile).
-    In una pubblicazione single-file questi assembly verrebbero normalmente incorporati
-    nell'unico eseguibile e sparirebbero da disco, rompendo silenziosamente il
-    caricamento dei plugin: li escludiamo esplicitamente dal bundle, cosi' restano
-    copiati accanto all'exe come nella build di sviluppo (bin/Debug/net8.0/).
+    referenziando Microsoft.JSInterop.dll come FILE FISICO accanto all'eseguibile
+    (Assembly.LoadFrom + MetadataReference.CreateFromFile) - VbControls/VbControls.Abstractions
+    non sono piu' DLL a se stanti (sono sorgenti incluse direttamente in Ide.Designer), quindi
+    non serve piu' proteggerle qui. In una pubblicazione single-file Microsoft.JSInterop.dll
+    verrebbe normalmente incorporata nell'unico eseguibile e sparirebbe da disco, rompendo
+    silenziosamente il caricamento dei plugin che referenziano IJSRuntime (es. VbLocalStorage):
+    la escludiamo esplicitamente dal bundle, cosi' resta copiata accanto all'exe come nella
+    build di sviluppo (bin/Debug/net8.0/).
   -->
   <Target Name="KeepPluginAssembliesOutOfSingleFile" BeforeTargets="_ComputeResolvedFilesToPublishTypes">
     <ItemGroup>
       <ResolvedFileToPublish Update="@(ResolvedFileToPublish)"
-                              Condition="'%(FileName)' == 'VbControls' or '%(FileName)' == 'VbControls.Abstractions' or '%(FileName)' == 'Microsoft.JSInterop'">
+                              Condition="'%(FileName)' == 'Microsoft.JSInterop'">
         <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
         <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
       </ResolvedFileToPublish>
@@ -52,6 +54,5 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Ide.Designer\Ide.Designer.csproj" />
-    <ProjectReference Include="..\VbControls\VbControls.csproj" />
   </ItemGroup>
 </Project>

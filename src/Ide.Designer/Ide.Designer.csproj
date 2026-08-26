@@ -1,7 +1,17 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
+  <!--
+    VbControls/VbControls.Abstractions non hanno un .csproj proprio: sono cartelle di sole
+    sorgenti, incluse qui via glob. Ide.Designer e' l'unico host, nel processo desktop, di
+    questi tipi (IDesignComponent ecc.): deve essercene una sola identita' di tipo condivisa
+    con l'assembly compilato dinamicamente da ComponentPluginLoader per Components/*.cs,
+    altrimenti IsAssignableFrom/i cast fallirebbero silenziosamente (vedi commento su
+    ComponentsLoadContext in ComponentPluginLoader.cs). Ide.App riceve questi tipi per via
+    transitiva referenziando Ide.Designer, non deve includerli una seconda volta.
+  -->
   <ItemGroup>
-    <ProjectReference Include="..\VbControls.Abstractions\VbControls.Abstractions.csproj" />
+    <Compile Include="..\VbControls\**\*.cs" LinkBase="VbControls" />
+    <Compile Include="..\VbControls.Abstractions\**\*.cs" LinkBase="VbControls.Abstractions" />
   </ItemGroup>
 
   <ItemGroup>

@@ -31,10 +31,11 @@ package_platform() {
     rsync -a "${EXCLUDES[@]}" samples/HelloWorldApp/ "$pkg_dir/samples/HelloWorldApp/"
     rsync -a "${EXCLUDES[@]}" samples/RssFeedViewer/ "$pkg_dir/samples/RssFeedViewer/"
 
-    # templates/BlazorPwaTemplate.csproj e samples/RssFeedViewer.csproj referenziano
-    # ../../src/VbControls/VbControls.csproj come sorgente (non una DLL): serve anche in
-    # questo pacchetto, con la stessa profondita' relativa, altrimenti dotnet watch/build
-    # falliscono con "project file not found" al primo avvio.
+    # templates/BlazorPwaTemplate.csproj e samples/RssFeedViewer.csproj includono via glob
+    # (<Compile Include="..\..\src\VbControls\**\*.cs" />) i file .cs di VbControls/
+    # VbControls.Abstractions - non sono progetti .csproj a se stanti, solo sorgenti: servono
+    # comunque in questo pacchetto, alla stessa profondita' relativa, altrimenti dotnet
+    # watch/build falliscono per mancanza dei file al primo avvio.
     mkdir -p "$pkg_dir/src"
     rsync -a "${EXCLUDES[@]}" src/VbControls/ "$pkg_dir/src/VbControls/"
     rsync -a "${EXCLUDES[@]}" src/VbControls.Abstractions/ "$pkg_dir/src/VbControls.Abstractions/"

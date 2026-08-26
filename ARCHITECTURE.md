@@ -79,8 +79,8 @@ Modulo 14. Decisione di design a lungo termine: i componenti — built-in e uten
   /src
     /Ide.App               → Avalonia UI, entry point IDE
     /Ide.Designer           → logica designer, JS interop, generatore codice
-    /VbControls              → classi base condivise (VisualComponentBase, NonVisualComponentBase)
-    /VbControls.Abstractions → IDesignComponent, IVisualComponent, INonVisualComponent, ComponentBehavior<T>, attributi
+    /VbControls              → classi base condivise (VisualComponentBase, NonVisualComponentBase) - sole sorgenti .cs, niente .csproj proprio: incluse via <Compile Include> da Ide.Designer (unico host lato desktop) e da ogni progetto WASM generato (copia indipendente)
+    /VbControls.Abstractions → IDesignComponent, IVisualComponent, INonVisualComponent, ComponentBehavior<T>, attributi - stesso trattamento di VbControls
   /templates
     /BlazorPwaTemplate       → template progetto Blazor WASM PWA
       /Components            → modulo 14: componenti come plugin (VbButton, VbLabel, VbTextBox, VbTextArea, VbHttpClient, VbTimer, VbLocalStorage, ...), compilati sia dal build normale sia da Ide.Designer via Roslyn

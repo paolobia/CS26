@@ -55,14 +55,12 @@ public sealed class ComponentPluginLoader : IDisposable
         if (!Directory.Exists(componentsDirectory))
             return [];
 
-        // VbControls(.Abstractions) potrebbe non essere ancora stato caricato nel processo
-        // se nulla nel codice di Ide.App ne ha ancora toccato un tipo direttamente: senza
-        // questo, i componenti compilati qui sotto (che estendono VisualComponentBase
-        // ecc.) non troverebbero quei tipi fra i riferimenti disponibili.
-        EnsureAssemblyLoaded("VbControls.Abstractions.dll");
-        EnsureAssemblyLoaded("VbControls.dll");
-        // Non fa parte della shared framework (e' un pacchetto NuGet): senza questo, un
-        // plugin che referenzia IJSRuntime (es. VbLocalStorage) non troverebbe il tipo.
+        // VbControls/VbControls.Abstractions non sono piu' DLL a se stanti (sono sorgenti
+        // incluse direttamente qui in Ide.Designer): i loro tipi sono gia' garantiti
+        // caricati, essendo Ide.Designer l'assembly che sta eseguendo questo stesso codice.
+        // Microsoft.JSInterop resta un vero pacchetto NuGet esterno, non fa parte della
+        // shared framework: senza questo, un plugin che referenzia IJSRuntime (es.
+        // VbLocalStorage) non troverebbe il tipo.
         EnsureAssemblyLoaded("Microsoft.JSInterop.dll");
 
         var sourceFiles = Directory.GetFiles(componentsDirectory, "*.cs", SearchOption.AllDirectories);

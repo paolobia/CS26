@@ -16,8 +16,16 @@
     <ServiceWorker Include="wwwroot\service-worker.js" PublishedContent="wwwroot\service-worker.published.js" />
   </ItemGroup>
 
+  <!--
+    VbControls/VbControls.Abstractions non hanno un .csproj proprio: sono cartelle di sole
+    sorgenti, incluse qui via glob. Questa e' una copia compilata indipendente da quella di
+    Ide.Designer (lato desktop) - nessun problema di identita' di tipo condivisa, perche'
+    questo assembly gira nel runtime WASM del browser, un processo separato che non
+    interagisce mai direttamente con l'AssemblyLoadContext dinamico di Ide.Designer.
+  -->
   <ItemGroup>
-    <ProjectReference Include="..\..\src\VbControls\VbControls.csproj" />
+    <Compile Include="..\..\src\VbControls\**\*.cs" LinkBase="VbControls" />
+    <Compile Include="..\..\src\VbControls.Abstractions\**\*.cs" LinkBase="VbControls.Abstractions" />
   </ItemGroup>
 
 </Project>
