@@ -1,0 +1,30 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="420" d:DesignHeight="260"
+        x:Class="Ide.App.SaveComponentAsWindow"
+        Width="420" Height="260"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Title="Salva come nuovo componente">
+    <DockPanel Margin="12">
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0" Spacing="8">
+            <Button x:Name="SaveButton" Content="Salva" Click="OnSaveClicked" IsDefault="True" />
+            <Button x:Name="CancelButton" Content="Annulla" Click="OnCancelClicked" IsCancel="True" />
+        </StackPanel>
+        <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto" Margin="0,0,0,0">
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="Nome componente" VerticalAlignment="Center" Margin="0,4,8,4" />
+            <TextBox x:Name="ComponentNameBox" Grid.Row="0" Grid.Column="1" Margin="0,4" PlaceholderText="es. VbButtonRosso" />
+
+            <TextBlock Grid.Row="1" Grid.Column="0" Text="Nome visualizzato" VerticalAlignment="Center" Margin="0,4,8,4" />
+            <TextBox x:Name="DisplayNameBox" Grid.Row="1" Grid.Column="1" Margin="0,4" />
+
+            <TextBlock Grid.Row="2" Grid.Column="0" Text="Icona" VerticalAlignment="Center" Margin="0,4,8,4" />
+            <TextBox x:Name="IconBox" Grid.Row="2" Grid.Column="1" Margin="0,4" PlaceholderText="es. 🟥" />
+
+            <TextBlock Grid.Row="3" Grid.Column="0" Text="Categoria" VerticalAlignment="Center" Margin="0,4,8,4" />
+            <TextBox x:Name="CategoryBox" Grid.Row="3" Grid.Column="1" Margin="0,4" />
+        </Grid>
+    </DockPanel>
+</Window>

@@ -26,7 +26,7 @@
                 <MenuItem Header="_Output" />
                 <Separator />
                 <!-- Modulo 14: ricompila Components/ senza riavviare l'IDE. -->
-                <MenuItem Header="_Reload Components" Click="OnReloadComponentsClicked" />
+                <MenuItem Header="_Ricompila Componenti" Click="OnReloadComponentsClicked" />
                 <!-- Forza il ridisegno della WebView senza attendere un nuovo rebuild:
                      mitiga il caso in cui dotnet watch ha gia' finito ma la WebView nativa
                      non ha ripulito il buffer (visto empiricamente: serve un resize della
@@ -54,7 +54,7 @@
              design (vedi commento su EnvironmentRequested nel code-behind). -->
         <Border DockPanel.Dock="Top" BorderBrush="Gray" BorderThickness="0,0,0,1" Padding="4">
             <StackPanel Orientation="Horizontal" Spacing="4">
-                <Button Content="🔄 Reload Components" Click="OnReloadComponentsClicked" />
+                <Button Content="🔄 Ricompila Componenti" Click="OnReloadComponentsClicked" />
                 <Button x:Name="ForceRefreshButton" Content="🔁 Force Refresh" Click="OnForceRefreshClicked" />
                 <Separator />
                 <Button Content="▶ Run" Click="OnRunMenuClicked" />

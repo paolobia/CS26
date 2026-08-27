@@ -24,14 +24,15 @@ public partial class MainWindow : Window
 
     // Deve corrispondere alla dimensione della griglia di sfondo generata in
     // FormCodeGenerator.GenerateDesignerCs (GridBackgroundStyle), altrimenti i controlli
-    // non cadrebbero visivamente sui puntini.
-    private const double GridSize = 16;
+    // non cadrebbero visivamente sulle linee.
+    private const double GridSize = 25;
 
     private static double SnapToGrid(double value) => Math.Round(value / GridSize) * GridSize;
 
     private readonly BlazorAppHost _appHost = new();
     private readonly ComponentPluginLoader _componentLoader = new();
     private readonly Dictionary<string, Type> _componentTypesByControlType = new();
+    private readonly Dictionary<string, DiscoveredComponent> _discoveredComponentsByControlType = new();
     private readonly List<PlacedControl> _placedControls = [];
     private readonly Dictionary<string, int> _fieldCounters = new();
 
@@ -131,6 +132,11 @@ public partial class MainWindow : Window
         // per la selezione prima che un gesture recognizer piu' in alto lo riconosca come
         // DoubleTapped, serve handledEventsToo per intercettarlo comunque.
         PlacedControlsList.AddHandler(InputElement.DoubleTappedEvent, OnPlacedControlDoubleTapped, handledEventsToo: true);
+
+        // Modulo 16: doppio click su un componente della Toolbox -> editor del sorgente.
+        // Il primo click di norma arma comunque il piazzamento (OnToolboxSelectionChanged):
+        // nessun conflitto reale, l'armamento resta finche' non si clicca sulla superficie.
+        ToolboxList.AddHandler(InputElement.DoubleTappedEvent, OnToolboxComponentDoubleTapped, handledEventsToo: true);
 
         // handledEventsToo: la WebView dentro DesignSurface intercetta gli eventi pointer
         // per l'interazione con la pagina e li marca come gestiti - senza questo il click
@@ -282,10 +288,12 @@ public partial class MainWindow : Window
 
         ToolboxList.Items.Clear();
         _componentTypesByControlType.Clear();
+        _discoveredComponentsByControlType.Clear();
 
         foreach (var component in _componentLoader.Components.OrderBy(c => c.Category).ThenBy(c => c.DisplayName))
         {
             _componentTypesByControlType[component.ControlType] = component.VisualType;
+            _discoveredComponentsByControlType[component.ControlType] = component;
 
             var item = new ListBoxItem { Tag = component.ControlType, Content = $"{component.Icon} {component.DisplayName}" };
             ToolboxList.Items.Add(item);
@@ -389,6 +397,72 @@ public partial class MainWindow : Window
     {
         _armedControlType = (ToolboxList.SelectedItem as ListBoxItem)?.Tag as string;
         DebugLog($"OnToolboxSelectionChanged: SelectedItem={ToolboxList.SelectedItem?.GetType().Name ?? "(null)"}, _armedControlType={_armedControlType ?? "(null)"}");
+    }
+
+    // Modulo 16: doppio click su un componente della Toolbox -> editor del sorgente
+    // completo del file che lo definisce (comune o di progetto), con la possibilita' di
+    // salvare in place o come nuovo componente (icona/nome/categoria a scelta), disponibile
+    // subito in Toolbox dopo il salvataggio senza un passo di "Ricompila Componenti"
+    // separato.
+    private async void OnToolboxComponentDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        if (ToolboxList.SelectedItem is not ListBoxItem { Tag: string controlType })
+            return;
+
+        if (!_discoveredComponentsByControlType.TryGetValue(controlType, out var component))
+            return;
+
+        string sourceCode;
+        try
+        {
+            sourceCode = await File.ReadAllTextAsync(component.SourceFilePath);
+        }
+        catch (IOException ex)
+        {
+            AppendOutput($"Impossibile leggere {component.SourceFilePath}: {ex.Message}");
+            return;
+        }
+
+        // Ciclo "riprova": un errore di ComponentSourceEditor.SaveAs (nome duplicato,
+        // identificatore non valido, classe non trovata) non deve far perdere il testo
+        // gia' editato - si riapre lo stesso editor con lo stesso contenuto finche' l'utente
+        // non salva con successo o annulla.
+        while (true)
+        {
+            var result = await new ComponentEditorWindow(
+                component.SourceFilePath, sourceCode, component.DisplayName, component.Icon, component.Category)
+                .ShowDialog<ComponentEditorResult?>(this);
+
+            if (result is null)
+                return; // annullato
+
+            sourceCode = result.SourceCode;
+
+            if (result.Action == ComponentEditorAction.Save)
+            {
+                await File.WriteAllTextAsync(component.SourceFilePath, sourceCode);
+                AppendOutput($"Salvato {component.SourceFilePath}");
+                LoadComponents();
+                return;
+            }
+
+            var request = result.SaveAsRequest!;
+            try
+            {
+                var componentsDirectory = Path.Combine(_projectDirectory!, "Components");
+                var destinationPath = ComponentSourceEditor.SaveAs(
+                    sourceCode, componentsDirectory, oldTypeName: component.VisualType.Name,
+                    request.ComponentName, request.DisplayName, request.Icon, request.Category);
+                AppendOutput($"Nuovo componente salvato in {destinationPath}");
+                LoadComponents();
+                return;
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+            {
+                AppendOutput($"Salvataggio come nuovo componente fallito: {ex.Message}");
+                // torna in cima al ciclo: riapre l'editor con lo stesso testo per riprovare
+            }
+        }
     }
 
     private void OnDesignSurfacePointerPressed(object? sender, PointerPressedEventArgs e)

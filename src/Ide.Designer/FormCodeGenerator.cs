@@ -47,9 +47,9 @@ public static class FormCodeGenerator
         // (modulo 13 - primo uso reale del flag ?design=true introdotto nel modulo 10).
         sb.AppendLine("<CascadingValue Value=\"IsDesignMode\">");
         // Griglia di allineamento visiva, solo in design mode (vincolo architetturale n.5:
-        // stesso bundle, pilotato da un flag - niente puntini nell'app reale a runtime).
-        // La dimensione (16px) deve corrispondere a GridSize in MainWindow.axaml.cs (snap
-        // al piazzamento), altrimenti i controlli non cadrebbero visivamente sui puntini.
+        // stesso bundle, pilotato da un flag - niente linee nell'app reale a runtime).
+        // La dimensione (25px) deve corrispondere a GridSize in MainWindow.axaml.cs (snap
+        // al piazzamento), altrimenti i controlli non cadrebbero visivamente sulle linee.
         // GridBackgroundStyle (in GenerateDesignerCs) invece di un ternario inline: un
         // ternario con stringhe letterali dentro un attributo HTML gia' delimitato da
         // doppi apici romperebbe il parsing Razor (apici annidati).
@@ -106,11 +106,13 @@ public static class FormCodeGenerator
         sb.AppendLine("    protected bool IsDesignMode => NavigationManager.Uri.Contains(\"design=true\", StringComparison.OrdinalIgnoreCase);");
         sb.AppendLine();
         // Griglia di allineamento visiva, solo in design mode (vincolo architetturale n.5:
-        // stesso bundle, pilotato da un flag - niente puntini nell'app reale a runtime). La
-        // dimensione (16px) deve corrispondere a GridSize in MainWindow.axaml.cs (snap al
-        // piazzamento), altrimenti i controlli non cadrebbero visivamente sui puntini.
+        // stesso bundle, pilotato da un flag - niente linee nell'app reale a runtime). La
+        // dimensione (25px) deve corrispondere a GridSize in MainWindow.axaml.cs (snap al
+        // piazzamento), altrimenti i controlli non cadrebbero visivamente sulle linee.
+        // Linee sottili (1px) invece di puntini: piu' leggibili come riferimento visivo su
+        // superfici piu' grandi (richiesta esplicita dell'utente).
         sb.AppendLine("    protected string GridBackgroundStyle => IsDesignMode");
-        sb.AppendLine("        ? \"background-image:radial-gradient(circle, #bbb 1px, transparent 1px); background-size:16px 16px;\"");
+        sb.AppendLine("        ? \"background-image:linear-gradient(to right, #ddd 1px, transparent 1px),linear-gradient(to bottom, #ddd 1px, transparent 1px); background-size:25px 25px;\"");
         sb.AppendLine("        : string.Empty;");
         sb.AppendLine();
 

@@ -14,7 +14,7 @@ namespace Ide.Designer;
 /// "Visual" - es. <c>VbButtonVisual</c> -> <c>VbButton</c>), il tipo CLR concreto, e i
 /// metadati per la Toolbox letti da <see cref="ToolboxComponentAttribute"/>.
 /// </summary>
-public sealed record DiscoveredComponent(string ControlType, Type VisualType, string DisplayName, string Icon, string Category);
+public sealed record DiscoveredComponent(string ControlType, Type VisualType, string DisplayName, string Icon, string Category, string SourceFilePath);
 
 /// <summary>
 /// Modulo 14 (sezione 2.2 di ARCHITECTURE.md): compila in memoria, via Roslyn, i file
@@ -158,7 +158,7 @@ public sealed class ComponentPluginLoader : IDisposable
                 problemiFirma.AddRange(problemi);
                 return problemi.Count == 0;
             })
-            .Select(ToDiscoveredComponent)
+            .Select(t => ToDiscoveredComponent(t, compilation))
             .ToList();
 
         return problemiFirma;
@@ -204,7 +204,11 @@ public sealed class ComponentPluginLoader : IDisposable
             Assembly.LoadFrom(path);
     }
 
-    private static DiscoveredComponent ToDiscoveredComponent(Type type)
+    // Risale dal tipo compilato (nell'assembly dinamico gia' caricato) al file sorgente che
+    // lo ha dichiarato, usando la CSharpCompilation costruita poco prima dell'Emit (stesso
+    // identificatore di metadata, quindi la stessa identita' logica di tipo) - necessario
+    // per l'editor sorgente aperto da un doppio click sulla Toolbox (modulo 16).
+    private static DiscoveredComponent ToDiscoveredComponent(Type type, CSharpCompilation compilation)
     {
         var controlType = type.Name.EndsWith("Visual", StringComparison.Ordinal)
             ? type.Name[..^"Visual".Length]
@@ -212,12 +216,17 @@ public sealed class ComponentPluginLoader : IDisposable
 
         var attribute = type.GetCustomAttribute<ToolboxComponentAttribute>();
 
+        var typeSymbol = compilation.GetTypeByMetadataName(type.FullName!)
+            ?? throw new InvalidOperationException($"Impossibile risalire al simbolo Roslyn per {type.FullName}.");
+        var sourceFilePath = typeSymbol.DeclaringSyntaxReferences[0].SyntaxTree.FilePath;
+
         return new DiscoveredComponent(
             controlType,
             type,
             attribute?.DisplayName ?? controlType,
             attribute?.Icon ?? "🧩",
-            attribute?.Category ?? "Plugin");
+            attribute?.Category ?? "Plugin",
+            sourceFilePath);
     }
 
     public void Unload()
