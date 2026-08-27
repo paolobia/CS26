@@ -292,6 +292,11 @@ public partial class MainWindow : Window
         }
 
         _syncInProgress = true;
+        // Disabilitato (non solo colorato): senza questo, click ripetuti per impazienza
+        // durante un'attesa lunga producevano solo spam di "gia' in corso" in Output senza
+        // nessun segnale visivo che il bottone stesse davvero facendo qualcosa - stesso
+        // pattern gia' usato per PublishMenuItem durante il publish.
+        ForceRefreshButton.IsEnabled = false;
         BusyOverlay.IsVisible = true;
         AppendOutput("Sincronizzazione...");
         try
@@ -306,6 +311,7 @@ public partial class MainWindow : Window
         finally
         {
             _syncInProgress = false;
+            ForceRefreshButton.IsEnabled = true;
             BusyOverlay.IsVisible = false;
         }
     }
@@ -766,7 +772,11 @@ public partial class MainWindow : Window
     // NON azzerare _pendingSync/il bottone "Aggiorna" rosso - non siamo davvero sincronizzati.
     private async Task<bool> ShowDesignerFormAsync()
     {
-        var settled = await _watchHost.WaitForBuildSettledAsync(_pendingSyncGeneration, TimeSpan.FromSeconds(20));
+        // 60s (non 20): il primo controllo piazzato crea Pages/DesignerForm.razor come file
+        // NUOVO, che forza un riavvio completo di dotnet watch (non un hot reload) - un
+        // riavvio a freddo (restore+build da zero) puo' richiedere piu' di 20s su una
+        // macchina piu' lenta o al primo avvio (nessuna cache di build gia' scaldata).
+        var settled = await _watchHost.WaitForBuildSettledAsync(_pendingSyncGeneration, TimeSpan.FromSeconds(60));
         if (!settled)
         {
             AppendOutput("Timeout in attesa del rebuild di dotnet watch: la pagina potrebbe non essere aggiornata.");

@@ -150,8 +150,19 @@ public sealed class DotnetWatchHost : IDisposable
         {
             var uri = new Uri(match.Groups[1].Value);
             ServerUri = uri;
-            readyTcs.TrySetResult(uri);
-            ScheduleGenerationAdvance();
+
+            // TrySetResult ritorna true solo la prima volta (il TCS di StartAsync non era
+            // ancora completato): e' l'avvio iniziale, non un vero riavvio dovuto a una
+            // modifica. Va avanzato SINCRONO, senza debounce: altrimenti un chiamante che
+            // legge Generation subito dopo che StartAsync() e' tornato (prima che il
+            // debounce di 700ms scada) lo scambierebbe per il completamento di una
+            // modifica fatta molto dopo - visto accadere davvero in un test manuale
+            // (Generation avanzava ~700ms dopo l'avvio, indipendentemente da qualunque
+            // modifica reale, facendo tornare "sincronizzato" un piazzamento appena fatto).
+            if (readyTcs.TrySetResult(uri))
+                Generation++;
+            else
+                ScheduleGenerationAdvance(); // un riavvio vero, successivo - questo si' va debounced
             return;
         }
 
