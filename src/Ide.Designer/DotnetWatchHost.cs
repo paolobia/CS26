@@ -13,9 +13,11 @@ public sealed class DotnetWatchHost : IDisposable
 {
     private static readonly Regex ListeningOnRegex = new(@"Now listening on:\s*(https?://\S+)", RegexOptions.Compiled);
 
-    // Confermato empiricamente (log reali dell'utente): per una modifica a .razor/.razor.cs
-    // gia' tracciati, dotnet watch applica l'Hot Reload invece di un riavvio completo -
-    // "Now listening on:" non ricompare MAI in questo caso.
+    // Con --no-hot-reload (vedi StartAsync) ogni modifica forza sempre un riavvio completo,
+    // quindi "Now listening on:" ricompare ad ogni ciclo di build - questo regex resta solo
+    // come fallback per riconoscere un eventuale segnale di completamento senza riavvio (non
+    // dovrebbe piu' comparire nei log reali con hot reload disattivato, ma non fa danno
+    // tenerlo).
     private static readonly Regex HotReloadCompletedRegex =
         new(@"Hot reload of changes (succeeded|failed)\.|No hot reload changes to apply\.", RegexOptions.Compiled);
 
@@ -61,7 +63,17 @@ public sealed class DotnetWatchHost : IDisposable
         // prima di riavviare quando modifica un file gia' tracciato senza poter usare il
         // suo browser-refresh (che qui e' disattivato): senza questa opzione il processo
         // resta bloccato in attesa di un input su stdin che non arrivera' mai.
-        var startInfo = new ProcessStartInfo("dotnet", $"watch --non-interactive --urls {url}")
+        // --no-hot-reload: bug reale osservato su una macchina Windows (SDK dell'utente) -
+        // dotnet watch termina subito con una NullReferenceException in
+        // BlazorWebAssemblyDeltaApplier.WaitForProcessRunningAsync quando il browser-refresh
+        // e' soppresso (DOTNET_WATCH_SUPPRESS_BROWSER_REFRESH sotto), perche' l'applier di
+        // Hot Reload aspetta una connessione dal browser che non arrivera' mai. Non e' un
+        // problema per noi: la WebView qui non consuma mai un ciclo di Hot Reload "in place",
+        // e' sempre questa classe a decidere quando ricaricarla (ShowDesignerFormAsync) -
+        // disattivarlo del tutto sposta ogni modifica su un riavvio completo (gia' il
+        // comportamento normale per un file nuovo) invece di aggirare il bug con un flag
+        // diverso, evitando quel percorso di codice del tutto.
+        var startInfo = new ProcessStartInfo("dotnet", $"watch --non-interactive --no-hot-reload --urls {url}")
         {
             WorkingDirectory = projectDirectory,
             RedirectStandardOutput = true,
