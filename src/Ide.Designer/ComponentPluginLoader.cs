@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Loader;
+using System.Security;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using VbControls.Abstractions;
@@ -91,14 +92,35 @@ public sealed class ComponentPluginLoader : IDisposable
         var references = new List<MetadataReference>();
         foreach (var path in referencePaths)
         {
+            // La cartella del runtime (specialmente in una publish self-contained, dove
+            // runtime e Avalonia native - coreclr.dll, clrjit.dll, hostfxr.dll,
+            // libSkiaSharp.dll, av_libglesv2.dll, msquic.dll, ecc. - stanno fianco a fianco
+            // agli assembly managed) contiene anche DLL native, non assembly .NET.
+            // AssemblyName.GetAssemblyName valida in modo affidabile ed economico se un
+            // file ha davvero metadata CLR, PRIMA di passarlo a Roslyn: senza questo
+            // controllo, su Windows MetadataReference.CreateFromFile accetta silenziosamente
+            // anche le DLL native (a differenza di Linux, dove lancia subito
+            // BadImageFormatException, gia' catturata sotto) - l'errore emerge solo dopo,
+            // come diagnostica di compilazione vera e propria (CS0009), bloccando l'intera
+            // compilazione di Components/ (un solo riferimento non valido fa fallire tutto,
+            // non solo se stesso) - bug reale trovato su una beta reale su Windows.
+            try
+            {
+                AssemblyName.GetAssemblyName(path);
+            }
+            catch (Exception ex) when (ex is BadImageFormatException or IOException or SecurityException)
+            {
+                continue;
+            }
+
             try
             {
                 references.Add(MetadataReference.CreateFromFile(path));
             }
             catch (IOException)
             {
-                // Alcuni file nella cartella del runtime non sono assembly .NET validi
-                // (o non sono leggibili): li si salta, non e' un errore fatale.
+                // Alcuni file nella cartella del runtime non sono leggibili: li si salta,
+                // non e' un errore fatale.
             }
             catch (BadImageFormatException)
             {
