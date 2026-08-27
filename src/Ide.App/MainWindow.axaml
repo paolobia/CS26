@@ -8,18 +8,24 @@
         Width="1024" Height="700">
     <DockPanel>
 
-        <!-- Barra dei menu: solo voci, nessun handler collegato ancora -->
+        <!-- Modulo 17: Nuovo/Apri/Salva Progetto + Proprieta' progetto. Il salvataggio dello
+             stato di design (project.ide.json) e' comunque automatico ad ogni modifica
+             (RegenerateFiles) - "Salva" qui e' un modo esplicito di riconfermarlo, non
+             l'unico modo per non perdere il lavoro. -->
         <Menu DockPanel.Dock="Top">
             <MenuItem Header="_File">
-                <MenuItem Header="_New Project" />
-                <MenuItem Header="_Open Project" />
+                <MenuItem Header="_New Project" Click="OnNewProjectClicked" />
+                <MenuItem Header="_Open Project" Click="OnOpenProjectClicked" />
                 <Separator />
-                <MenuItem Header="_Save" />
-                <MenuItem Header="Save _As" />
+                <MenuItem Header="_Save" Click="OnSaveProjectClicked" />
+                <MenuItem Header="_Project Properties..." Click="OnProjectPropertiesClicked" />
                 <Separator />
-                <MenuItem Header="E_xit" />
+                <MenuItem Header="E_xit" Click="OnExitClicked" />
             </MenuItem>
-            <MenuItem Header="_Edit" />
+            <MenuItem Header="_Edit">
+                <MenuItem Header="_Undo" InputGesture="Ctrl+Z" Click="OnUndoMenuClicked" />
+                <MenuItem Header="_Redo" InputGesture="Ctrl+Y" Click="OnRedoMenuClicked" />
+            </MenuItem>
             <MenuItem Header="_View">
                 <MenuItem Header="_Toolbox" />
                 <MenuItem Header="_Properties" />

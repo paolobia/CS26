@@ -10,6 +10,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Ide.Designer;
@@ -29,12 +30,17 @@ public partial class MainWindow : Window
 
     private static double SnapToGrid(double value) => Math.Round(value / GridSize) * GridSize;
 
-    private readonly BlazorAppHost _appHost = new();
+    // Non piu' readonly (modulo 17): Apri/Nuovo Progetto sostituisce l'istanza per puntare
+    // a un'altra directory di progetto - BlazorAppHost non supporta un secondo StartAsync
+    // sulla stessa istanza.
+    private BlazorAppHost _appHost = new();
     private readonly ComponentPluginLoader _componentLoader = new();
     private readonly Dictionary<string, Type> _componentTypesByControlType = new();
     private readonly Dictionary<string, DiscoveredComponent> _discoveredComponentsByControlType = new();
     private readonly List<PlacedControl> _placedControls = [];
     private readonly Dictionary<string, int> _fieldCounters = new();
+    private readonly UndoRedoManager _undoRedo = new();
+    private ProjectMetadata _projectMetadata = new("BlazorPwaTemplate", "Blazor PWA App", string.Empty);
 
     private string? _projectDirectory;
     private bool _designerFormOpened;
@@ -155,10 +161,16 @@ public partial class MainWindow : Window
 
         // Modulo 10: F5 = Run, esce dalla modalita' di design (vincolo architetturale n.5:
         // design mode e run mode sono lo stesso bundle, pilotato da un flag in query string).
+        // Modulo 17: Ctrl+Z / Ctrl+Y (e Ctrl+Shift+Z, alternativa comune) per Undo/Redo.
         KeyDown += async (_, e) =>
         {
             if (e.Key == Key.F5)
                 await RunAsync();
+            else if (e.Key == Key.Z && e.KeyModifiers == KeyModifiers.Control)
+                UndoDesignChange();
+            else if (e.Key == Key.Y && e.KeyModifiers == KeyModifiers.Control
+                     || e.Key == Key.Z && e.KeyModifiers == (KeyModifiers.Control | KeyModifiers.Shift))
+                RedoDesignChange();
         };
 
         _ = StartDesignerAsync();
@@ -377,6 +389,7 @@ public partial class MainWindow : Window
         if (PlacedControlsList.SelectedItem is not string fieldName)
             return;
 
+        _undoRedo.RecordSnapshot(_placedControls);
         _placedControls.RemoveAll(c => c.FieldName == fieldName);
         PlacedControlsList.Items.Remove(fieldName);
         PropertiesGrid.Children.Clear();
@@ -407,10 +420,168 @@ public partial class MainWindow : Window
         if (index < 0 || newIndex < 0 || newIndex >= _placedControls.Count)
             return; // gia' primo/ultimo, o nessuna selezione valida: no-op silenzioso
 
+        _undoRedo.RecordSnapshot(_placedControls);
         (_placedControls[index], _placedControls[newIndex]) = (_placedControls[newIndex], _placedControls[index]);
         PlacedControlsList.Items.RemoveAt(index);
         PlacedControlsList.Items.Insert(newIndex, fieldName);
         PlacedControlsList.SelectedItem = fieldName; // l'indice e' cambiato, il valore no
+
+        RegenerateFiles();
+    }
+
+    // Modulo 17: Nuovo Progetto copia lo scheletro del template incluso (esclusi bin/obj,
+    // il Form gia' generato e lo stato di design - un progetto nuovo parte sempre vuoto) in
+    // una cartella scelta dall'utente, poi lo apre. Riusa ProjectPropertiesWindow per
+    // raccogliere Nome/Titolo/Descrizione alla creazione, invece di un prompt di solo testo.
+    private async void OnNewProjectClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        var topLevel = TopLevel.GetTopLevel(this)!;
+        var folders = await topLevel.StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = "Scegli la cartella in cui creare il nuovo progetto",
+            AllowMultiple = false,
+        });
+        if (folders.Count == 0 || folders[0].TryGetLocalPath() is not { } parentDirectory)
+            return;
+
+        var metadata = await new ProjectPropertiesWindow(new ProjectMetadata(string.Empty, "Blazor PWA App", string.Empty))
+            .ShowDialog<ProjectMetadata?>(this);
+        if (metadata is null)
+            return;
+
+        var targetDirectory = Path.Combine(parentDirectory, metadata.ProjectName);
+        if (Directory.Exists(targetDirectory))
+        {
+            AppendOutput($"Esiste gia' una cartella '{targetDirectory}': scegli un altro nome o un'altra posizione.");
+            return;
+        }
+
+        var templateDirectory = Path.Combine(FindRepoRoot(), "templates", "BlazorPwaTemplate");
+        CopyProjectSkeleton(templateDirectory, targetDirectory);
+        ProjectStateStore.Save(targetDirectory, metadata, []);
+
+        AppendOutput($"Nuovo progetto creato in {targetDirectory}.");
+        await OpenProjectAsync(targetDirectory);
+    }
+
+    // Esclude bin/obj (build locali, mai da copiare in un progetto nuovo) e qualunque Form
+    // gia' generato/stato di design (un progetto nuovo parte sempre da un Form vuoto, anche
+    // se per qualche motivo il template sorgente ne avesse gia' uno).
+    private static readonly HashSet<string> SkeletonExcludedDirs = new(StringComparer.OrdinalIgnoreCase) { "bin", "obj" };
+
+    private static void CopyProjectSkeleton(string sourceDirectory, string targetDirectory)
+    {
+        Directory.CreateDirectory(targetDirectory);
+
+        foreach (var dir in Directory.GetDirectories(sourceDirectory))
+        {
+            if (SkeletonExcludedDirs.Contains(Path.GetFileName(dir)))
+                continue;
+
+            CopyProjectSkeleton(dir, Path.Combine(targetDirectory, Path.GetFileName(dir)));
+        }
+
+        foreach (var file in Directory.GetFiles(sourceDirectory))
+        {
+            var fileName = Path.GetFileName(file);
+            if (fileName is "DesignerForm.razor" or "DesignerForm.razor.designer.cs" or ProjectStateStore.FileName)
+                continue;
+
+            File.Copy(file, Path.Combine(targetDirectory, fileName), overwrite: false);
+        }
+    }
+
+    private async void OnOpenProjectClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        var topLevel = TopLevel.GetTopLevel(this)!;
+        var folders = await topLevel.StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = "Apri progetto",
+            AllowMultiple = false,
+        });
+        if (folders.Count == 0 || folders[0].TryGetLocalPath() is not { } directory)
+            return;
+
+        await OpenProjectAsync(directory);
+    }
+
+    // Il salvataggio dello stato di design e' gia' automatico (RegenerateFiles, ad ogni
+    // modifica): questo comando esplicito serve solo a dare conferma visiva/rassicurazione
+    // all'utente, non e' l'unico modo per non perdere il lavoro.
+    private void OnSaveProjectClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (_projectDirectory is null)
+            return;
+
+        ProjectStateStore.Save(_projectDirectory, _projectMetadata, _placedControls);
+        AppendOutput("Progetto salvato.");
+    }
+
+    private async void OnProjectPropertiesClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        var result = await new ProjectPropertiesWindow(_projectMetadata).ShowDialog<ProjectMetadata?>(this);
+        if (result is null)
+            return;
+
+        _projectMetadata = result;
+        Title = $"Ide.App - {_projectMetadata.ProjectName}";
+
+        if (_projectDirectory is not null)
+            ProjectStateStore.Save(_projectDirectory, _projectMetadata, _placedControls);
+
+        AppendOutput("Proprieta' progetto aggiornate.");
+    }
+
+    private void OnExitClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => Close();
+
+    private void OnUndoMenuClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => UndoDesignChange();
+
+    private void OnRedoMenuClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => RedoDesignChange();
+
+    private void UndoDesignChange()
+    {
+        var previous = _undoRedo.Undo(_placedControls);
+        if (previous is null)
+        {
+            AppendOutput("Nulla da annullare.");
+            return;
+        }
+
+        RestoreFromSnapshot(previous);
+        AppendOutput("Annullato.");
+    }
+
+    private void RedoDesignChange()
+    {
+        var next = _undoRedo.Redo(_placedControls);
+        if (next is null)
+        {
+            AppendOutput("Nulla da ripetere.");
+            return;
+        }
+
+        RestoreFromSnapshot(next);
+        AppendOutput("Ripetuto.");
+    }
+
+    // Ricostruisce _placedControls/PlacedControlsList/property grid da uno snapshot
+    // serializzato (Undo/Redo) - stessa logica di ricostruzione gia' usata per aprire un
+    // progetto salvato (ProjectStateStore.FromState), qui applicata in memoria senza
+    // toccare project.ide.json ne' la history di Undo/Redo stessa (gia' aggiornata dal
+    // chiamante in UndoRedoManager).
+    private void RestoreFromSnapshot(List<PlacedControlState> states)
+    {
+        _placedControls.Clear();
+        PlacedControlsList.Items.Clear();
+        PropertiesGrid.Children.Clear();
+        MethodsGrid.Children.Clear();
+
+        foreach (var state in states)
+        {
+            var control = ProjectStateStore.FromState(state, CreateVisual);
+            _placedControls.Add(control);
+            PlacedControlsList.Items.Add(control.FieldName);
+        }
 
         RegenerateFiles();
     }
@@ -559,6 +730,7 @@ public partial class MainWindow : Window
         visual.LayoutBox.Y = SnapToGrid(Math.Max(0, position.Y - visual.LayoutBox.Height / 2));
 
         var placed = new PlacedControl(fieldName, controlType, visual);
+        _undoRedo.RecordSnapshot(_placedControls);
         _placedControls.Add(placed);
 
         PlacedControlsList.Items.Add(fieldName);
@@ -704,6 +876,7 @@ public partial class MainWindow : Window
                 var checkBox = new CheckBox { IsChecked = currentValue as bool? };
                 checkBox.IsCheckedChanged += (_, _) =>
                 {
+                    _undoRedo.RecordSnapshot(_placedControls);
                     property.SetValue(placed.Visual, checkBox.IsChecked ?? false);
                     RegenerateFiles();
                 };
@@ -725,6 +898,7 @@ public partial class MainWindow : Window
                         return;
                     }
 
+                    _undoRedo.RecordSnapshot(_placedControls);
                     property.SetValue(placed.Visual, converted);
                     RegenerateFiles();
                 };
@@ -810,6 +984,11 @@ public partial class MainWindow : Window
 
         MethodBodyEditor.WriteMethodBody(pagesDirectory, FormName, FormNamespace, actualMethodName, isAsync, result);
 
+        // L'Undo/Redo (a snapshot di _placedControls) copre solo se un metodo e' "collegato"
+        // o no (WiredMethods, parte dello stato serializzabile) - non il testo del corpo, che
+        // vive in {Form}.Behavior.cs e resta fuori scope (vedi commento su UndoRedoManager).
+        _undoRedo.RecordSnapshot(_placedControls);
+
         var hasCode = !string.IsNullOrWhiteSpace(result);
         if (hasCode)
             placed.WiredMethods.Add(displayName);
@@ -876,6 +1055,20 @@ public partial class MainWindow : Window
 
         AppendOutput($"Generato -> {Path.GetFileName(razorPath)}, {Path.GetFileName(designerCsPath)}");
         DebugLog($"RegenerateFiles: file scritti con successo ({razorPath}, {designerCsPath})");
+
+        // Salvataggio automatico dello stato di design (modulo 17): a differenza dei file
+        // .razor/.razor.designer.cs (derivati, rigenerati sempre da zero), project.ide.json
+        // e' la fonte di verita' del design - va scritto ad ogni modifica, non solo su un
+        // comando "Salva" esplicito, altrimenti chiudere l'IDE senza ricordarsi di salvare
+        // perderebbe silenziosamente ogni controllo piazzato.
+        try
+        {
+            ProjectStateStore.Save(_projectDirectory!, _projectMetadata, _placedControls);
+        }
+        catch (IOException ex)
+        {
+            AppendOutput($"Impossibile salvare lo stato del progetto: {ex.Message}");
+        }
 
         _pendingSync = true;
         UpdateSyncButtonState();
@@ -1064,21 +1257,66 @@ public partial class MainWindow : Window
 
     private void OnClearOutputClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => OutputTextBox.Text = string.Empty;
 
-    // Modulo 5 (rivisto: BlazorAppHost sostituisce dotnet watch): compila il progetto Blazor
-    // e avvia il server di file statici come processo figlio persistente, poi punta la
-    // WebView all'URL reale (nessun URL hardcoded a priori).
-    private async Task StartDesignerAsync()
+    // Modulo 17: primo avvio dell'IDE, apre sempre il progetto template incluso (comportamento
+    // gia' esistente, invariato per non rompere l'esperienza di chi non usa ancora Nuovo/Apri
+    // Progetto). Apri Progetto/Nuovo Progetto richiamano OpenProjectAsync direttamente con
+    // un'altra directory.
+    private Task StartDesignerAsync() => OpenProjectAsync(Path.Combine(FindRepoRoot(), "templates", "BlazorPwaTemplate"));
+
+    // Modulo 5 (rivisto: BlazorAppHost sostituisce dotnet watch) + Modulo 17 (Nuovo/Apri
+    // Progetto): compila il progetto Blazor e avvia il server di file statici come processo
+    // figlio persistente, poi punta la WebView all'URL reale. Se la directory contiene gia'
+    // un progetto salvato (project.ide.json), ricostruisce i controlli piazzati prima di
+    // generare/compilare - altrimenti riparte da un Form vuoto.
+    private async Task OpenProjectAsync(string projectDirectory)
     {
-        _projectDirectory = Path.Combine(FindRepoRoot(), "templates", "BlazorPwaTemplate");
-        LoadComponents(); // solo file locali, non serve attendere che il server sia pronto
+        // Se questa non e' la primissima apertura (l'utente ha usato Apri/Nuovo Progetto su
+        // una sessione gia' avviata), la vecchia sessione va chiusa: BlazorAppHost non
+        // supporta un secondo StartAsync sulla stessa istanza, e lo stato di design in
+        // memoria appartiene al progetto precedente.
+        _appHost.Dispose();
+        _appHost = new BlazorAppHost();
+        _undoRedo.Clear();
+        _placedControls.Clear();
+        PlacedControlsList.Items.Clear();
+        PropertiesGrid.Children.Clear();
+        MethodsGrid.Children.Clear();
+        _fieldCounters.Clear();
+        _designerFormOpened = false;
+        _currentPagePath = string.Empty;
+        _pendingSync = false;
+        UpdateSyncButtonState();
+
+        _projectDirectory = projectDirectory;
+
+        var state = ProjectStateStore.Load(projectDirectory);
+        _projectMetadata = state?.Metadata
+            ?? new ProjectMetadata(new DirectoryInfo(projectDirectory).Name, "Blazor PWA App", string.Empty);
+        Title = $"Ide.App - {_projectMetadata.ProjectName}";
+
+        LoadComponents(); // solo file locali, non serve attendere che il server sia pronto - ma DEVE avvenire prima di ricostruire i controlli (serve a risolvere ControlType -> Type)
+
+        if (state is not null)
+        {
+            foreach (var controlState in state.Controls)
+            {
+                var control = ProjectStateStore.FromState(controlState, CreateVisual);
+                _placedControls.Add(control);
+                PlacedControlsList.Items.Add(control.FieldName);
+                RestoreFieldCounter(control.ControlType, control.FieldName);
+            }
+
+            AppendOutput($"Progetto caricato: {state.Controls.Count} controlli ripristinati da {ProjectStateStore.FileName}.");
+            RegenerateFiles(); // deriva .razor/.razor.designer.cs dallo stato appena ricostruito
+        }
 
         BusyOverlay.IsVisible = true;
-        DebugLog("StartDesignerAsync: BusyOverlay.IsVisible = true, build iniziale + avvio server...");
+        DebugLog("OpenProjectAsync: BusyOverlay.IsVisible = true, build iniziale + avvio server...");
         try
         {
             var uri = await _appHost.StartAsync(_projectDirectory, "http://localhost:5245",
                 line => Dispatcher.UIThread.Post(() => AppendOutput(line)));
-            DebugLog($"StartDesignerAsync: server pronto su {uri}");
+            DebugLog($"OpenProjectAsync: server pronto su {uri}");
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 DesignerWebView.Source = BuildUri(uri, design: true);
@@ -1093,8 +1331,18 @@ public partial class MainWindow : Window
         finally
         {
             BusyOverlay.IsVisible = false;
-            DebugLog("StartDesignerAsync: BusyOverlay.IsVisible = false");
+            DebugLog("OpenProjectAsync: BusyOverlay.IsVisible = false");
         }
+    }
+
+    // Dopo aver ricostruito un controllo da un progetto salvato, il prossimo NextFieldName
+    // per lo stesso ControlType deve ripartire da un numero libero (non da 1, che
+    // collliderebbe con un controllo gia' caricato con quel nome).
+    private void RestoreFieldCounter(string controlType, string fieldName)
+    {
+        var digits = new string(fieldName.Reverse().TakeWhile(char.IsDigit).Reverse().ToArray());
+        if (int.TryParse(digits, out var number))
+            _fieldCounters[controlType] = Math.Max(_fieldCounters.GetValueOrDefault(controlType, 0), number);
     }
 
     private static string FindRepoRoot()
