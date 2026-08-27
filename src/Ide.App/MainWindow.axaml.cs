@@ -379,9 +379,38 @@ public partial class MainWindow : Window
 
         _placedControls.RemoveAll(c => c.FieldName == fieldName);
         PlacedControlsList.Items.Remove(fieldName);
-        PropertyEditorsPanel.Children.Clear();
+        PropertiesGrid.Children.Clear();
+        MethodsGrid.Children.Clear();
 
         AppendOutput($"Rimosso {fieldName}");
+
+        RegenerateFiles();
+    }
+
+    // Riordino dei controlli piazzati (richiesta esplicita dell'utente): l'ordine incide
+    // sull'ordine dei tag nel .razor generato (FormCodeGenerator.GenerateRazor itera
+    // _placedControls nell'ordine della lista) e quindi sullo z-order visivo di controlli
+    // sovrapposti. _placedControls e PlacedControlsList.Items devono restare sincronizzati -
+    // stesso indice, stesso ordine - altrimenti la selezione per FieldName smetterebbe di
+    // corrispondere al controllo giusto.
+    private void OnMoveControlUpClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => MoveSelectedControl(-1);
+
+    private void OnMoveControlDownClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => MoveSelectedControl(1);
+
+    private void MoveSelectedControl(int direction)
+    {
+        if (PlacedControlsList.SelectedItem is not string fieldName)
+            return;
+
+        var index = _placedControls.FindIndex(c => c.FieldName == fieldName);
+        var newIndex = index + direction;
+        if (index < 0 || newIndex < 0 || newIndex >= _placedControls.Count)
+            return; // gia' primo/ultimo, o nessuna selezione valida: no-op silenzioso
+
+        (_placedControls[index], _placedControls[newIndex]) = (_placedControls[newIndex], _placedControls[index]);
+        PlacedControlsList.Items.RemoveAt(index);
+        PlacedControlsList.Items.Insert(newIndex, fieldName);
+        PlacedControlsList.SelectedItem = fieldName; // l'indice e' cambiato, il valore no
 
         RegenerateFiles();
     }
@@ -584,14 +613,16 @@ public partial class MainWindow : Window
     {
         if (PlacedControlsList.SelectedItem is not string fieldName)
         {
-            PropertyEditorsPanel.Children.Clear();
+            PropertiesGrid.Children.Clear();
+            MethodsGrid.Children.Clear();
             return;
         }
 
         var placed = _placedControls.FirstOrDefault(c => c.FieldName == fieldName);
         if (placed is null)
         {
-            PropertyEditorsPanel.Children.Clear();
+            PropertiesGrid.Children.Clear();
+            MethodsGrid.Children.Clear();
             return;
         }
 
@@ -601,20 +632,30 @@ public partial class MainWindow : Window
     // Fattorizzato fuori da OnPlacedControlSelected per poter aggiornare la grid (in
     // particolare le preview "<N righe>"/"<vuoto>" della sezione Metodi) anche dopo un
     // salvataggio dal modale (OpenMethodEditorAsync), non solo al cambio di selezione.
+    // Divisa in due Grid distinti (PropertiesGrid/MethodsGrid, richiesta esplicita
+    // dell'utente) invece di un unico Grid con un separatore manuale in mezzo.
     private void RefreshPropertyGrid(PlacedControl placed)
     {
-        PropertyEditorsPanel.Children.Clear();
+        RefreshProperties(placed);
+        RefreshMethods(placed);
 
-        // Griglia a due colonne (nome | editor), non piu' impilati verticalmente come uno
-        // StackPanel: piu' compatta e piu' leggibile come una vera property grid.
-        PropertyEditorsPanel.RowDefinitions.Clear();
+        // Selezionare un controllo gia' piazzato non passa da RegenerateFiles/OnForceRefreshClicked
+        // (che fanno gia' il nudge di ridisegno per altri casi): senza questo, la grid appena
+        // popolata non si vedrebbe finche' non succede qualcos'altro che forzi un repaint.
+        InvalidateDesignerWebViewDisplay();
+    }
+
+    private void RefreshProperties(PlacedControl placed)
+    {
+        PropertiesGrid.Children.Clear();
+        PropertiesGrid.RowDefinitions.Clear();
         var row = 0;
 
         // "Nome" sempre in cima, presa da FieldName (non da [VisualProperty] come le altre
         // proprieta') e sola lettura: rinominare un controllo gia' piazzato richiederebbe
         // un refactoring coordinato di tutti i file generati + il codice sviluppatore che
         // referenzia il vecchio nome - fuori scope per ora.
-        PropertyEditorsPanel.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+        PropertiesGrid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
         var nameLabel = new TextBlock
         {
             Text = "Nome",
@@ -623,12 +664,12 @@ public partial class MainWindow : Window
         };
         Grid.SetRow(nameLabel, row);
         Grid.SetColumn(nameLabel, 0);
-        PropertyEditorsPanel.Children.Add(nameLabel);
+        PropertiesGrid.Children.Add(nameLabel);
 
         var nameValue = new TextBox { Text = placed.FieldName, IsReadOnly = true, Opacity = 0.7 };
         Grid.SetRow(nameValue, row);
         Grid.SetColumn(nameValue, 1);
-        PropertyEditorsPanel.Children.Add(nameValue);
+        PropertiesGrid.Children.Add(nameValue);
         row++;
 
         string? currentCategory = null;
@@ -641,7 +682,7 @@ public partial class MainWindow : Window
 
             if (category != currentCategory)
             {
-                PropertyEditorsPanel.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+                PropertiesGrid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
                 var header = new TextBlock
                 {
                     Text = category,
@@ -651,12 +692,12 @@ public partial class MainWindow : Window
                 Grid.SetRow(header, row);
                 Grid.SetColumn(header, 0);
                 Grid.SetColumnSpan(header, 2);
-                PropertyEditorsPanel.Children.Add(header);
+                PropertiesGrid.Children.Add(header);
                 currentCategory = category;
                 row++;
             }
 
-            PropertyEditorsPanel.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+            PropertiesGrid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
 
             var label = new TextBlock
             {
@@ -666,7 +707,7 @@ public partial class MainWindow : Window
             };
             Grid.SetRow(label, row);
             Grid.SetColumn(label, 0);
-            PropertyEditorsPanel.Children.Add(label);
+            PropertiesGrid.Children.Add(label);
 
             var currentValue = property.GetValue(placed.Visual);
             Control editor;
@@ -704,26 +745,16 @@ public partial class MainWindow : Window
 
             Grid.SetRow(editor, row);
             Grid.SetColumn(editor, 1);
-            PropertyEditorsPanel.Children.Add(editor);
+            PropertiesGrid.Children.Add(editor);
             row++;
         }
+    }
 
-        // Separatore visivo fra "Proprieta'" e "Metodi".
-        PropertyEditorsPanel.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
-        var separator = new Border { Height = 1, Background = Avalonia.Media.Brushes.Gray, Margin = new Avalonia.Thickness(0, 8, 0, 8) };
-        Grid.SetRow(separator, row);
-        Grid.SetColumn(separator, 0);
-        Grid.SetColumnSpan(separator, 2);
-        PropertyEditorsPanel.Children.Add(separator);
-        row++;
-
-        PropertyEditorsPanel.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
-        var methodsHeader = new TextBlock { Text = "Metodi", FontWeight = Avalonia.Media.FontWeight.Bold };
-        Grid.SetRow(methodsHeader, row);
-        Grid.SetColumn(methodsHeader, 0);
-        Grid.SetColumnSpan(methodsHeader, 2);
-        PropertyEditorsPanel.Children.Add(methodsHeader);
-        row++;
+    private void RefreshMethods(PlacedControl placed)
+    {
+        MethodsGrid.Children.Clear();
+        MethodsGrid.RowDefinitions.Clear();
+        var row = 0;
 
         var pagesDirectory = Path.Combine(_projectDirectory!, "Pages");
         var behaviorPath = Path.Combine(pagesDirectory, $"{FormName}.Behavior.cs");
@@ -741,7 +772,7 @@ public partial class MainWindow : Window
 
         foreach (var (displayName, actualMethodName, isAsync) in methodRows)
         {
-            PropertyEditorsPanel.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+            MethodsGrid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
 
             var methodLabel = new TextBlock
             {
@@ -751,7 +782,7 @@ public partial class MainWindow : Window
             };
             Grid.SetRow(methodLabel, row);
             Grid.SetColumn(methodLabel, 0);
-            PropertyEditorsPanel.Children.Add(methodLabel);
+            MethodsGrid.Children.Add(methodLabel);
 
             var methodInfo = MethodBodyEditor.ReadMethod(behaviorPath, actualMethodName);
             var previewBlock = new TextBlock
@@ -761,7 +792,7 @@ public partial class MainWindow : Window
             };
             Grid.SetRow(previewBlock, row);
             Grid.SetColumn(previewBlock, 1);
-            PropertyEditorsPanel.Children.Add(previewBlock);
+            MethodsGrid.Children.Add(previewBlock);
 
             // TextBlock espone gia' l'evento routed DoubleTapped, non serve il pattern
             // AddHandler(..., handledEventsToo: true) usato per PlacedControlsList (quello
@@ -771,11 +802,6 @@ public partial class MainWindow : Window
 
             row++;
         }
-
-        // Selezionare un controllo gia' piazzato non passa da RegenerateFiles/OnForceRefreshClicked
-        // (che fanno gia' il nudge di ridisegno per altri casi): senza questo, la grid appena
-        // popolata non si vedrebbe finche' non succede qualcos'altro che forzi un repaint.
-        InvalidateDesignerWebViewDisplay();
     }
 
     // Apre il modale di editing per un metodo (evento del tipo, Costruttore o Distruttore):

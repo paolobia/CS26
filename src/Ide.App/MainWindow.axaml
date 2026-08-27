@@ -62,62 +62,90 @@
             </StackPanel>
         </Border>
 
-        <!-- Pannello Output/Immediate in basso -->
-        <Border DockPanel.Dock="Bottom" Height="140" BorderBrush="Gray" BorderThickness="0,1,0,0">
-            <DockPanel Margin="4">
-                <DockPanel DockPanel.Dock="Top">
-                    <Button DockPanel.Dock="Right" Content="C" Width="24" Click="OnClearOutputClicked" ToolTip.Tip="Svuota il log" />
-                    <TextBlock Text="Output" FontWeight="Bold" Margin="4" />
-                </DockPanel>
-                <TextBox x:Name="OutputTextBox" IsReadOnly="True" AcceptsReturn="True"
-                         Background="Transparent" BorderThickness="0" />
-            </DockPanel>
-        </Border>
+        <!-- Corpo sotto menu/toolbar: area principale + Output, separati da un GridSplitter
+             orizzontale trascinabile (richiesta esplicita dell'utente: Toolbox/Proprieta'/
+             Output devono essere ridimensionabili, non piu' dimensioni fisse). La riga
+             Output resta un valore in pixel (140, il vecchio Height fisso) che il
+             GridSplitter puo' modificare trascinando. -->
+        <Grid RowDefinitions="*,Auto,140">
+            <Grid Grid.Row="0" ColumnDefinitions="180,Auto,*,Auto,240">
 
-        <!-- Toolbox a sinistra: popolata dinamicamente dal modulo 14 (ComponentPluginLoader)
-             a partire dai componenti trovati in {ProjectDir}/Components/, non piu' hardcoded. -->
-        <Border DockPanel.Dock="Left" Width="180" BorderBrush="Gray" BorderThickness="0,0,1,0">
-            <DockPanel Margin="4">
-                <TextBlock DockPanel.Dock="Top" Text="Toolbox" FontWeight="Bold" Margin="4" />
-                <ListBox x:Name="ToolboxList" SelectionMode="Single" Background="Transparent"
-                         SelectionChanged="OnToolboxSelectionChanged" />
-            </DockPanel>
-        </Border>
-
-        <!-- Property Grid a destra (modulo 8): elenco dei controlli posizionati in alto,
-             editor delle proprieta' [VisualProperty] del controllo selezionato sotto,
-             generati via reflection. Il doppio click su un elemento (modulo 9) genera
-             l'handler del click in {Form}.Behavior.cs. -->
-        <Border DockPanel.Dock="Right" Width="240" BorderBrush="Gray" BorderThickness="1,0,0,0">
-            <DockPanel Margin="4">
-                <TextBlock DockPanel.Dock="Top" Text="Properties" FontWeight="Bold" Margin="4" />
-                <ListBox x:Name="PlacedControlsList" DockPanel.Dock="Top" Height="120"
-                         SelectionChanged="OnPlacedControlSelected" />
-                <Button DockPanel.Dock="Top" Content="Elimina" Click="OnDeletePlacedControlClicked" Margin="0,4,0,0" />
-                <ScrollViewer>
-                    <Grid x:Name="PropertyEditorsPanel" ColumnDefinitions="Auto,*" Margin="4" />
-                </ScrollViewer>
-            </DockPanel>
-        </Border>
-
-        <!-- Superficie di design al centro: la WebView che ospita il progetto Blazor reale.
-             Piazzamento controlli: click su un elemento della Toolbox per "armarlo", click
-             qui per piazzarlo (non drag&drop nativo - vedi commento su OnDesignSurfacePointerPressed
-             nel code-behind per il perche'). -->
-        <Border x:Name="DesignSurface" BorderBrush="Gray" BorderThickness="1">
-            <Grid>
-                <NativeWebView x:Name="DesignerWebView" />
-                <!-- Watermark mostrato durante l'attesa del rebuild di dotnet watch (fino a
-                     20s): senza, un drop/una modifica di proprieta' sembra non fare nulla
-                     finche' il controllo non appare di colpo. IsHitTestVisible="False" cosi'
-                     non impedisce fisicamente un nuovo drop (la correttezza e' garantita dalla
-                     guardia _regenerateInProgress nel code-behind, non da un blocco qui). -->
-                <Border x:Name="BusyOverlay" Background="#AA000000" IsVisible="False" IsHitTestVisible="False">
-                    <TextBlock Text="Aggiornamento in corso..." Foreground="White" FontSize="16"
-                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                <!-- Toolbox a sinistra: popolata dinamicamente dal modulo 14
+                     (ComponentPluginLoader) a partire dai componenti trovati in
+                     {ProjectDir}/Components/, non piu' hardcoded. -->
+                <Border Grid.Column="0" MinWidth="100" BorderBrush="Gray" BorderThickness="0,0,1,0">
+                    <DockPanel Margin="4">
+                        <TextBlock DockPanel.Dock="Top" Text="Toolbox" FontWeight="Bold" Margin="4" />
+                        <ListBox x:Name="ToolboxList" SelectionMode="Single" Background="Transparent"
+                                 SelectionChanged="OnToolboxSelectionChanged" />
+                    </DockPanel>
                 </Border>
+
+                <GridSplitter Grid.Column="1" Width="5" ResizeDirection="Columns" Background="Gray" />
+
+                <!-- Superficie di design al centro: la WebView che ospita il progetto Blazor
+                     reale. Piazzamento controlli: click su un elemento della Toolbox per
+                     "armarlo", click qui per piazzarlo (non drag&drop nativo - vedi commento
+                     su OnDesignSurfacePointerPressed nel code-behind per il perche'). -->
+                <Border Grid.Column="2" x:Name="DesignSurface" MinWidth="200" BorderBrush="Gray" BorderThickness="1">
+                    <Grid>
+                        <NativeWebView x:Name="DesignerWebView" />
+                        <!-- Watermark mostrato durante l'attesa del rebuild di dotnet watch (fino a
+                             20s): senza, un drop/una modifica di proprieta' sembra non fare nulla
+                             finche' il controllo non appare di colpo. IsHitTestVisible="False" cosi'
+                             non impedisce fisicamente un nuovo drop (la correttezza e' garantita dalla
+                             guardia _regenerateInProgress nel code-behind, non da un blocco qui). -->
+                        <Border x:Name="BusyOverlay" Background="#AA000000" IsVisible="False" IsHitTestVisible="False">
+                            <TextBlock Text="Aggiornamento in corso..." Foreground="White" FontSize="16"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                    </Grid>
+                </Border>
+
+                <GridSplitter Grid.Column="3" Width="5" ResizeDirection="Columns" Background="Gray" />
+
+                <!-- Property Grid a destra (modulo 8): elenco dei controlli posizionati in
+                     alto, sotto una piccola toolbar per riordinare/eliminare, sotto due
+                     griglie separate (Proprieta'/Metodi) generate via reflection. Il doppio
+                     click su un elemento (modulo 9) genera l'handler del click in
+                     {Form}.Behavior.cs. -->
+                <Border Grid.Column="4" MinWidth="180" BorderBrush="Gray" BorderThickness="1,0,0,0">
+                    <DockPanel Margin="4">
+                        <TextBlock DockPanel.Dock="Top" Text="Properties" FontWeight="Bold" Margin="4" />
+                        <ListBox x:Name="PlacedControlsList" DockPanel.Dock="Top" Height="120"
+                                 SelectionChanged="OnPlacedControlSelected" />
+                        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,4,0,0" Spacing="4">
+                            <Button Content="▲" Click="OnMoveControlUpClicked" ToolTip.Tip="Sposta in su" />
+                            <Button Content="▼" Click="OnMoveControlDownClicked" ToolTip.Tip="Sposta in giu'" />
+                            <Button Content="🗑" Click="OnDeletePlacedControlClicked" ToolTip.Tip="Elimina" />
+                        </StackPanel>
+                        <ScrollViewer>
+                            <StackPanel Margin="0,8,0,0" Spacing="4">
+                                <TextBlock Text="Proprieta'" FontWeight="Bold" />
+                                <Grid x:Name="PropertiesGrid" ColumnDefinitions="Auto,*" />
+                                <TextBlock Text="Metodi" FontWeight="Bold" Margin="0,8,0,0" />
+                                <Grid x:Name="MethodsGrid" ColumnDefinitions="Auto,*" />
+                            </StackPanel>
+                        </ScrollViewer>
+                    </DockPanel>
+                </Border>
+
             </Grid>
-        </Border>
+
+            <GridSplitter Grid.Row="1" Height="5" ResizeDirection="Rows" Background="Gray" />
+
+            <!-- Pannello Output/Immediate in basso -->
+            <Border Grid.Row="2" MinHeight="80" BorderBrush="Gray" BorderThickness="0,1,0,0">
+                <DockPanel Margin="4">
+                    <DockPanel DockPanel.Dock="Top">
+                        <Button DockPanel.Dock="Right" Content="C" Width="24" Click="OnClearOutputClicked" ToolTip.Tip="Svuota il log" />
+                        <TextBlock Text="Output" FontWeight="Bold" Margin="4" />
+                    </DockPanel>
+                    <TextBox x:Name="OutputTextBox" IsReadOnly="True" AcceptsReturn="True"
+                             Background="Transparent" BorderThickness="0" />
+                </DockPanel>
+            </Border>
+        </Grid>
 
     </DockPanel>
 </Window>
