@@ -29,7 +29,7 @@ public partial class MainWindow : Window
 
     private static double SnapToGrid(double value) => Math.Round(value / GridSize) * GridSize;
 
-    private readonly DotnetWatchHost _watchHost = new();
+    private readonly BlazorAppHost _appHost = new();
     private readonly ComponentPluginLoader _componentLoader = new();
     private readonly Dictionary<string, Type> _componentTypesByControlType = new();
     private readonly List<PlacedControl> _placedControls = [];
@@ -42,7 +42,6 @@ public partial class MainWindow : Window
     private bool _publishInProgress;
     private bool _syncInProgress;
     private bool _pendingSync;
-    private int _pendingSyncGeneration;
     private ScrollViewer? _outputScrollViewer;
     private bool _outputAutoScroll = true;
 
@@ -120,13 +119,13 @@ public partial class MainWindow : Window
 
         Closed += (_, _) =>
         {
-            _watchHost.Dispose();
+            _appHost.Dispose();
             _componentLoader.Dispose();
         };
         // Rete di sicurezza: se il processo termina senza passare da una chiusura pulita
         // della finestra (crash, kill del processo), evita comunque di lasciare orfano
-        // il processo figlio `dotnet watch`.
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => _watchHost.Dispose();
+        // il processo figlio del server di file statici.
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => _appHost.Dispose();
 
         // Come per la Toolbox (modulo 6): ListBoxItem marca il pointer event come Handled
         // per la selezione prima che un gesture recognizer piu' in alto lo riconosca come
@@ -208,14 +207,23 @@ public partial class MainWindow : Window
     // dovesse ricevere l'evento per primo su una piattaforma dove i click NON sono
     // intercettati dalla WebView, consuma _armedControlType e questo messaggio arriva
     // comunque ma non fa nulla (armedControlType gia' null) - nessun doppio piazzamento.
+    // BUG REALE trovato (log di debug beta6): #ide-design-surface esiste solo dentro
+    // {FormName}.razor, generato da RegenerateFiles() - che a sua volta viene chiamato solo
+    // DENTRO PlaceControl, cioe' solo DOPO un piazzamento gia' avvenuto. La primissima volta
+    // (pagina Home vuota, nessun controllo mai piazzato) quel div non esiste ancora: il
+    // vecchio codice faceva `if (!el) return;` e abbandonava il click in silenzio - un
+    // vicolo cieco totale su Windows, dove il percorso Avalonia nativo non riceve mai
+    // l'evento (vedi sopra): il primo controllo in assoluto non era MAI piazzabile.
+    // Fallback su document.body quando il div non c'e' ancora: la pagina iniziale e' vuota
+    // e occupa l'intero body, quindi le coordinate coincidono comunque con quelle che
+    // avrebbe #ide-design-surface una volta generato.
     private const string ClickForwardingScript = """
         (function(){
             if (window.__ideClickHooked) return 'already-hooked';
             window.__ideClickHooked = true;
 
             document.addEventListener('click', function (ev) {
-                var el = document.getElementById('ide-design-surface');
-                if (!el) return;
+                var el = document.getElementById('ide-design-surface') || document.body;
                 var rect = el.getBoundingClientRect();
                 try
                 {
@@ -753,8 +761,8 @@ public partial class MainWindow : Window
         _ = OpenMethodEditorAsync(placed, eventInfo.EventName, $"{fieldName}{eventInfo.MethodSuffix}", eventInfo.IsAsync);
     }
 
-    // Scrive solo i file (veloce, sincrono) - non aspetta piu' il rebuild di dotnet watch
-    // ne' aggiorna la WebView: con piu' modifiche ravvicinate, aspettare/ricaricare a ogni
+    // Scrive solo i file (veloce, sincrono) - non aspetta la rebuild ne' aggiorna la WebView:
+    // con piu' modifiche ravvicinate, aspettare/ricaricare a ogni
     // singola modifica era lento e bloccava il flusso di lavoro. La sincronizzazione vera
     // e propria (attesa rebuild + refresh WebView) e' ora solo manuale, via il bottone
     // "Aggiorna" (OnForceRefreshClicked) - il bottone diventa rosso finche' non la premi.
@@ -763,14 +771,7 @@ public partial class MainWindow : Window
     // nell'ultimo stato valido generato.
     private void RegenerateFiles()
     {
-        // Letto PRIMA di scrivere i file: OnForceRefreshClicked aspettera' che
-        // _watchHost.Generation avanzi oltre questo valore. Catturarlo qui (non al click su
-        // "Aggiorna", che puo' avvenire molto dopo) e' essenziale: dotnet watch elabora la
-        // modifica e avanza la generazione in background indipendentemente da quando/se
-        // l'utente premera' il bottone, e DotnetWatchHost tiene traccia dell'avanzamento
-        // sempre, non solo mentre qualcuno e' in attesa.
-        _pendingSyncGeneration = _watchHost.Generation;
-        DebugLog($"RegenerateFiles: _pendingSyncGeneration catturato = {_pendingSyncGeneration}, controlli={_placedControls.Count}");
+        DebugLog($"RegenerateFiles: controlli={_placedControls.Count}");
 
         string razorPath, designerCsPath;
         try
@@ -800,32 +801,27 @@ public partial class MainWindow : Window
             ForceRefreshButton.ClearValue(Button.BackgroundProperty); // torna al colore di tema di default
     }
 
-    // Dopo il primo drop naviga la WebView sulla pagina generata; dopo i drop successivi
-    // la ricarica con Refresh() (dotnet watch ricompila il progetto quando i file
-    // cambiano, ma abbiamo disattivato il suo browser-refresh interno, quindi il reload
-    // lo pilotiamo qui: riassegnare Source con lo stesso Uri non riavvierebbe la pagina).
-    // Attende il segnale di riavvio effettivo di Kestrel invece di un semplice delay: un
-    // delay fisso navigava mentre `dotnet watch` stava ancora ricompilando/riavviando,
-    // causando una race sui file di build (visto empiricamente durante lo sviluppo).
-    // Ritorna false in caso di timeout: il chiamante (OnForceRefreshClicked) usa questo per
+    // Dopo il primo piazzamento naviga la WebView sulla pagina generata; dopo i successivi
+    // la ricarica con Refresh() (il server di file statici e' persistente, non viene mai
+    // riavviato - riassegnare Source con lo stesso Uri non ricaricherebbe la pagina).
+    // Aspetta prima l'esito reale della build (BlazorAppHost.RebuildAsync: nessun riavvio
+    // di processo, nessuna race - vedi commento su BlazorAppHost) invece di indovinare lo
+    // stato da un output streaming come faceva il vecchio DotnetWatchHost.
+    // Ritorna false se la build fallisce: il chiamante (OnForceRefreshClicked) usa questo per
     // NON azzerare _pendingSync/il bottone "Aggiorna" rosso - non siamo davvero sincronizzati.
     private async Task<bool> ShowDesignerFormAsync()
     {
-        DebugLog($"ShowDesignerFormAsync: attendo Generation > {_pendingSyncGeneration} (attuale={_watchHost.Generation})");
+        DebugLog("ShowDesignerFormAsync: avvio rebuild...");
 
-        // 60s (non 20): il primo controllo piazzato crea Pages/DesignerForm.razor come file
-        // NUOVO, che forza un riavvio completo di dotnet watch (non un hot reload) - un
-        // riavvio a freddo (restore+build da zero) puo' richiedere piu' di 20s su una
-        // macchina piu' lenta o al primo avvio (nessuna cache di build gia' scaldata).
-        var settled = await _watchHost.WaitForBuildSettledAsync(_pendingSyncGeneration, TimeSpan.FromSeconds(60));
-        DebugLog($"ShowDesignerFormAsync: WaitForBuildSettledAsync -> settled={settled}, Generation ora={_watchHost.Generation}");
-        if (!settled)
+        var buildOk = await _appHost.RebuildAsync(line => Dispatcher.UIThread.Post(() => AppendOutput(line)));
+        DebugLog($"ShowDesignerFormAsync: RebuildAsync -> buildOk={buildOk}");
+        if (!buildOk)
         {
-            AppendOutput("Timeout in attesa del rebuild di dotnet watch: la pagina potrebbe non essere aggiornata.");
+            AppendOutput("Build fallita: la pagina potrebbe non essere aggiornata (vedi errori sopra).");
             return false;
         }
 
-        var uri = _watchHost.ServerUri!; // impostato da StartAsync, sempre non-null a questo punto
+        var uri = _appHost.ServerUri!; // impostato da StartAsync, sempre non-null a questo punto
         DebugLog($"ShowDesignerFormAsync: navigo verso {uri}");
 
         _currentPagePath = "designerform";
@@ -833,9 +829,10 @@ public partial class MainWindow : Window
 
         if (_designerFormOpened)
         {
-            // Il server potrebbe essere stato riavviato da dotnet watch ma l'URL e'
-            // identico a prima: riassegnare Source non farebbe nulla (Avalonia salta il
-            // PropertyChanged se il valore non cambia), serve un Refresh esplicito.
+            // Il server statico legge sempre da disco, ma la WebView potrebbe avere gia'
+            // in cache la vecchia pagina/asset: riassegnare Source con lo stesso Uri non
+            // farebbe nulla (Avalonia salta il PropertyChanged se il valore non cambia),
+            // serve un Refresh esplicito.
             DesignerWebView.Refresh();
         }
         else
@@ -853,7 +850,7 @@ public partial class MainWindow : Window
     // n.5). "Stop" torna alla modalita' di design.
     private Task RunAsync()
     {
-        if (_watchHost.ServerUri is null)
+        if (_appHost.ServerUri is null)
         {
             AppendOutput("Run (F5) ignorato: il server non e' ancora pronto.");
             return Task.CompletedTask;
@@ -861,7 +858,7 @@ public partial class MainWindow : Window
 
         _isRunning = true;
         AppendOutput("Run (F5): avvio senza la modalita' di design.");
-        DesignerWebView.Source = BuildUri(_watchHost.ServerUri, design: false);
+        DesignerWebView.Source = BuildUri(_appHost.ServerUri, design: false);
         InvalidateDesignerWebViewDisplay();
         return Task.CompletedTask;
     }
@@ -870,12 +867,12 @@ public partial class MainWindow : Window
 
     private void OnStopMenuClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (_watchHost.ServerUri is null || !_isRunning)
+        if (_appHost.ServerUri is null || !_isRunning)
             return;
 
         _isRunning = false;
         AppendOutput("Stop: torno alla modalita' di design.");
-        DesignerWebView.Source = BuildUri(_watchHost.ServerUri, design: true);
+        DesignerWebView.Source = BuildUri(_appHost.ServerUri, design: true);
         InvalidateDesignerWebViewDisplay();
     }
 
@@ -979,19 +976,21 @@ public partial class MainWindow : Window
 
     private void OnClearOutputClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => OutputTextBox.Text = string.Empty;
 
-    // Modulo 5: avvia `dotnet watch` sul progetto Blazor come processo figlio e, quando
-    // Kestrel e' pronto, punta la WebView all'URL reale (nessun URL hardcoded a priori).
+    // Modulo 5 (rivisto: BlazorAppHost sostituisce dotnet watch): compila il progetto Blazor
+    // e avvia il server di file statici come processo figlio persistente, poi punta la
+    // WebView all'URL reale (nessun URL hardcoded a priori).
     private async Task StartDesignerAsync()
     {
         _projectDirectory = Path.Combine(FindRepoRoot(), "templates", "BlazorPwaTemplate");
-        LoadComponents(); // solo file locali, non serve attendere che dotnet watch sia pronto
+        LoadComponents(); // solo file locali, non serve attendere che il server sia pronto
 
         BusyOverlay.IsVisible = true;
-        DebugLog("StartDesignerAsync: BusyOverlay.IsVisible = true, avvio dotnet watch...");
+        DebugLog("StartDesignerAsync: BusyOverlay.IsVisible = true, build iniziale + avvio server...");
         try
         {
-            var uri = await _watchHost.StartAsync(_projectDirectory, "http://localhost:5245");
-            DebugLog($"StartDesignerAsync: dotnet watch pronto su {uri}");
+            var uri = await _appHost.StartAsync(_projectDirectory, "http://localhost:5245",
+                line => Dispatcher.UIThread.Post(() => AppendOutput(line)));
+            DebugLog($"StartDesignerAsync: server pronto su {uri}");
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 DesignerWebView.Source = BuildUri(uri, design: true);
@@ -1000,7 +999,8 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[DesignerHost] Errore nell'avvio di dotnet watch: {ex}");
+            Console.WriteLine($"[DesignerHost] Errore nell'avvio del designer: {ex}");
+            Dispatcher.UIThread.Post(() => AppendOutput($"Errore nell'avvio del designer: {ex.Message}"));
         }
         finally
         {
