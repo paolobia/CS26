@@ -428,11 +428,13 @@ public partial class MainWindow : Window
         DebugLog($"OnToolboxSelectionChanged: SelectedItem={ToolboxList.SelectedItem?.GetType().Name ?? "(null)"}, _armedControlType={_armedControlType ?? "(null)"}");
     }
 
-    // Modulo 16: doppio click su un componente della Toolbox -> editor del sorgente
-    // completo del file che lo definisce (comune o di progetto), con la possibilita' di
-    // salvare in place o come nuovo componente (icona/nome/categoria a scelta), disponibile
-    // subito in Toolbox dopo il salvataggio senza un passo di "Ricompila Componenti"
-    // separato.
+    // Modulo 16: doppio click su un componente della Toolbox -> editor della COPPIA di file
+    // che lo definisce insieme (comune o di progetto): il componente Blazor .razor
+    // (rendering/comportamento) e la classe Visual .cs (dati/proprieta'). I due file sono
+    // trattati come un'unita' indivisibile - mai letti/scritti/duplicati separatamente -
+    // per evitare esattamente il bug reale trovato in sessione (una classe Visual duplicata
+    // senza il suo .razor produce un componente che Blazor non sa renderizzare). Disponibile
+    // subito in Toolbox dopo il salvataggio, senza un passo di "Ricompila Componenti" separato.
     private async void OnToolboxComponentDoubleTapped(object? sender, TappedEventArgs e)
     {
         if (ToolboxList.SelectedItem is not ListBoxItem { Tag: string controlType })
@@ -441,14 +443,15 @@ public partial class MainWindow : Window
         if (!_discoveredComponentsByControlType.TryGetValue(controlType, out var component))
             return;
 
-        string sourceCode;
+        string razorSource, visualSource;
         try
         {
-            sourceCode = await File.ReadAllTextAsync(component.SourceFilePath);
+            razorSource = await File.ReadAllTextAsync(component.RazorFilePath);
+            visualSource = await File.ReadAllTextAsync(component.SourceFilePath);
         }
         catch (IOException ex)
         {
-            AppendOutput($"Impossibile leggere {component.SourceFilePath}: {ex.Message}");
+            AppendOutput($"Impossibile leggere i file di {controlType}: {ex.Message}");
             return;
         }
 
@@ -459,18 +462,21 @@ public partial class MainWindow : Window
         while (true)
         {
             var result = await new ComponentEditorWindow(
-                component.SourceFilePath, sourceCode, component.DisplayName, component.Icon, component.Category)
+                component.RazorFilePath, razorSource, component.SourceFilePath, visualSource,
+                component.DisplayName, component.Icon, component.Category)
                 .ShowDialog<ComponentEditorResult?>(this);
 
             if (result is null)
                 return; // annullato
 
-            sourceCode = result.SourceCode;
+            razorSource = result.RazorSourceCode;
+            visualSource = result.VisualSourceCode;
 
             if (result.Action == ComponentEditorAction.Save)
             {
-                await File.WriteAllTextAsync(component.SourceFilePath, sourceCode);
-                AppendOutput($"Salvato {component.SourceFilePath}");
+                await File.WriteAllTextAsync(component.RazorFilePath, razorSource);
+                await File.WriteAllTextAsync(component.SourceFilePath, visualSource);
+                AppendOutput($"Salvati {component.RazorFilePath} e {component.SourceFilePath}");
                 LoadComponents();
                 return;
             }
@@ -479,10 +485,11 @@ public partial class MainWindow : Window
             try
             {
                 var componentsDirectory = Path.Combine(_projectDirectory!, "Components");
-                var destinationPath = ComponentSourceEditor.SaveAs(
-                    sourceCode, componentsDirectory, oldTypeName: component.VisualType.Name,
+                var saved = ComponentSourceEditor.SaveAs(
+                    visualSource, razorSource, componentsDirectory,
+                    oldControlType: controlType, oldTypeName: component.VisualType.Name,
                     request.ComponentName, request.DisplayName, request.Icon, request.Category);
-                AppendOutput($"Nuovo componente salvato in {destinationPath}");
+                AppendOutput($"Nuovo componente salvato in {saved.RazorFilePath} e {saved.VisualFilePath}");
                 LoadComponents();
                 return;
             }
@@ -672,31 +679,12 @@ public partial class MainWindow : Window
         PropertiesGrid.Children.Add(nameValue);
         row++;
 
-        string? currentCategory = null;
+        // Griglia piatta, senza raggruppamenti per categoria (richiesta esplicita
+        // dell'utente: stile Visual Basic 6 - una property grid VB6 non separa le proprieta'
+        // in sezioni "Aspetto"/"Dati"/ecc., e' un unico elenco). L'ordine resta quello di
+        // dichiarazione delle proprieta' [VisualProperty] sulla classe Visual.
         foreach (var property in VisualPropertyReader.GetEditableProperties(placed.Visual))
         {
-            var category = property.GetCustomAttributes(typeof(VisualPropertyAttribute), inherit: true)
-                .Cast<VisualPropertyAttribute>()
-                .First()
-                .Category;
-
-            if (category != currentCategory)
-            {
-                PropertiesGrid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
-                var header = new TextBlock
-                {
-                    Text = category,
-                    FontWeight = Avalonia.Media.FontWeight.Bold,
-                    Margin = new Avalonia.Thickness(0, 8, 0, 2),
-                };
-                Grid.SetRow(header, row);
-                Grid.SetColumn(header, 0);
-                Grid.SetColumnSpan(header, 2);
-                PropertiesGrid.Children.Add(header);
-                currentCategory = category;
-                row++;
-            }
-
             PropertiesGrid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
 
             var label = new TextBlock

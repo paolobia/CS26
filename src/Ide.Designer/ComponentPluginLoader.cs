@@ -14,7 +14,8 @@ namespace Ide.Designer;
 /// "Visual" - es. <c>VbButtonVisual</c> -> <c>VbButton</c>), il tipo CLR concreto, e i
 /// metadati per la Toolbox letti da <see cref="ToolboxComponentAttribute"/>.
 /// </summary>
-public sealed record DiscoveredComponent(string ControlType, Type VisualType, string DisplayName, string Icon, string Category, string SourceFilePath);
+public sealed record DiscoveredComponent(
+    string ControlType, Type VisualType, string DisplayName, string Icon, string Category, string SourceFilePath, string RazorFilePath);
 
 /// <summary>
 /// Modulo 14 (sezione 2.2 di ARCHITECTURE.md): compila in memoria, via Roslyn, i file
@@ -150,7 +151,7 @@ public sealed class ComponentPluginLoader : IDisposable
 
         var problemiFirma = new List<string>();
 
-        Components = assembly.GetTypes()
+        var candidati = assembly.GetTypes()
             .Where(t => t is { IsClass: true, IsAbstract: false } && typeof(IDesignComponent).IsAssignableFrom(t))
             .Where(t =>
             {
@@ -158,7 +159,23 @@ public sealed class ComponentPluginLoader : IDisposable
                 problemiFirma.AddRange(problemi);
                 return problemi.Count == 0;
             })
-            .Select(t => ToDiscoveredComponent(t, compilation))
+            .Select(t => ToDiscoveredComponent(t, compilation));
+
+        // Un componente e' una COPPIA indivisibile: la classe Visual (qui, dati/proprieta')
+        // e il componente Blazor .razor che la renderizza davvero (nessuna delle due basta
+        // da sola - vincolo esplicito deciso in sessione dopo aver trovato un bug reale: una
+        // classe Visual duplicata senza il suo .razor produce un tag che compare in Toolbox
+        // ma che Blazor non sa renderizzare). Una classe Visual senza il suo .razor viene
+        // esclusa e segnalata qui, invece di entrare comunque in Toolbox rotta in silenzio.
+        Components = candidati
+            .Where(c =>
+            {
+                if (File.Exists(c.RazorFilePath))
+                    return true;
+
+                problemiFirma.Add($"{c.VisualType.Name}: manca il file Blazor corrispondente ({c.RazorFilePath}) - componente escluso.");
+                return false;
+            })
             .ToList();
 
         return problemiFirma;
@@ -220,13 +237,20 @@ public sealed class ComponentPluginLoader : IDisposable
             ?? throw new InvalidOperationException($"Impossibile risalire al simbolo Roslyn per {type.FullName}.");
         var sourceFilePath = typeSymbol.DeclaringSyntaxReferences[0].SyntaxTree.FilePath;
 
+        // Convenzione gia' rispettata da tutti i componenti esistenti: il componente Blazor
+        // (es. VbButton.razor) vive nella STESSA cartella della sua classe Visual (es.
+        // VbButtonVisual.cs), con lo stesso nome del ControlType (senza il suffisso
+        // "Visual").
+        var razorFilePath = Path.Combine(Path.GetDirectoryName(sourceFilePath)!, $"{controlType}.razor");
+
         return new DiscoveredComponent(
             controlType,
             type,
             attribute?.DisplayName ?? controlType,
             attribute?.Icon ?? "🧩",
             attribute?.Category ?? "Plugin",
-            sourceFilePath);
+            sourceFilePath,
+            razorFilePath);
     }
 
     public void Unload()

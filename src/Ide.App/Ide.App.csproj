@@ -50,6 +50,11 @@
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.0" />
     <PackageReference Include="Avalonia.Fonts.Inter" Version="12.0.0" />
     <PackageReference Include="Avalonia.Controls.WebView" Version="12.0.0" />
+    <!-- Editor sorgente componenti (doppio click sulla Toolbox): evidenziazione sintattica
+         C#/Razor. Versione allineata al resto di Avalonia (12.0.0) - il pacchetto NuGet
+         corretto e' "Avalonia.AvaloniaEdit" (il semplice "AvaloniaEdit" e' una serie a parte,
+         ferma alla 0.10.x, non allineata ad Avalonia 12). -->
+    <PackageReference Include="Avalonia.AvaloniaEdit" Version="12.0.0" />
   </ItemGroup>
 
   <ItemGroup>

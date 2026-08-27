@@ -2,9 +2,10 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d" d:DesignWidth="800" d:DesignHeight="600"
+        xmlns:ae="using:AvaloniaEdit"
+        mc:Ignorable="d" d:DesignWidth="900" d:DesignHeight="650"
         x:Class="Ide.App.ComponentEditorWindow"
-        Width="800" Height="600"
+        Width="900" Height="650"
         WindowStartupLocation="CenterOwner"
         Title="Modifica componente">
     <DockPanel Margin="8">
@@ -14,9 +15,21 @@
             <Button x:Name="SaveAsButton" Content="Salva come nuovo componente..." Click="OnSaveAsClicked" />
             <Button x:Name="CancelButton" Content="Annulla" Click="OnCancelClicked" />
         </StackPanel>
-        <TextBox x:Name="CodeTextBox"
-                 AcceptsReturn="True" AcceptsTab="True" TextWrapping="NoWrap"
-                 FontFamily="Consolas,Cascadia Mono,monospace" FontSize="13"
-                 VerticalContentAlignment="Top" />
+
+        <!-- La coppia .razor (rendering/comportamento) + .cs (classe Visual: dati/proprieta')
+             rappresenta insieme UN solo componente (vincolo: vanno sempre editati/salvati/
+             duplicati insieme, mai uno senza l'altro - vedi ComponentSourceEditor). La tab
+             .razor e' la prima/predefinita: e' quella con la logica vera, la classe Visual
+             ha gia' un'interfaccia dedicata (la Property Grid) per il caso comune. -->
+        <TabControl>
+            <TabItem Header="Componente (.razor)">
+                <ae:TextEditor x:Name="RazorEditor" ShowLineNumbers="True"
+                               FontFamily="Consolas,Cascadia Mono,monospace" FontSize="13" />
+            </TabItem>
+            <TabItem Header="Visual (.cs)">
+                <ae:TextEditor x:Name="VisualEditor" ShowLineNumbers="True"
+                               FontFamily="Consolas,Cascadia Mono,monospace" FontSize="13" />
+            </TabItem>
+        </TabControl>
     </DockPanel>
 </Window>
