@@ -53,7 +53,11 @@ public static class FormCodeGenerator
         // GridBackgroundStyle (in GenerateDesignerCs) invece di un ternario inline: un
         // ternario con stringhe letterali dentro un attributo HTML gia' delimitato da
         // doppi apici romperebbe il parsing Razor (apici annidati).
-        sb.AppendLine("""<div style="position:relative;width:100%;height:600px;@GridBackgroundStyle">""");
+        // id fisso: permette allo script iniettato in MainWindow (ponte JS per il click su
+        // WebView2, dove i click nativi non arrivano mai ad Avalonia) di calcolare le
+        // coordinate del click relative a QUESTO contenitore, le stesse usate da
+        // LayoutBox.X/Y - non alle coordinate della finestra o della pagina intera.
+        sb.AppendLine("""<div id="ide-design-surface" style="position:relative;width:100%;height:600px;@GridBackgroundStyle">""");
         foreach (var control in controls)
         {
             // Modulo 9 (generalizzato a N eventi per controllo, non piu' uno solo): il

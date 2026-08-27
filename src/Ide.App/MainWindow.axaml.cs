@@ -42,6 +42,7 @@ public partial class MainWindow : Window
     private bool _publishInProgress;
     private bool _syncInProgress;
     private bool _pendingSync;
+    private int _pendingSyncGeneration;
     private ScrollViewer? _outputScrollViewer;
     private bool _outputAutoScroll = true;
 
@@ -77,13 +78,28 @@ public partial class MainWindow : Window
                 gtk.ExperimentalOffscreen = true;
         };
 
-        // Modulo 11: inoltra console.log/warn/error e gli errori JS non gestiti della
-        // pagina reale nel pannello Output, tramite lo stesso canale invokeCSharpAction
-        // gia' usato internamente da Avalonia.Controls.WebView per WebMessageReceived.
+        // Modulo 11 + ponte click (vedi ClickForwardingScript sotto): un solo canale
+        // WebMessageReceived porta sia i log della console inoltrata sia i click per il
+        // piazzamento, distinti dal campo "kind" nel JSON.
         DesignerWebView.WebMessageReceived += (_, e) =>
         {
             if (e.Body is null)
                 return;
+
+            try
+            {
+                using var doc = JsonDocument.Parse(e.Body);
+                if (doc.RootElement.TryGetProperty("kind", out var kind) && kind.GetString() == "click")
+                {
+                    var x = doc.RootElement.GetProperty("x").GetDouble();
+                    var y = doc.RootElement.GetProperty("y").GetDouble();
+                    Dispatcher.UIThread.Post(() => OnDesignSurfaceClickFromWebView(new Point(x, y)));
+                    return;
+                }
+            }
+            catch (JsonException)
+            {
+            }
 
             ConsoleMessage? message = null;
             try
@@ -175,11 +191,49 @@ public partial class MainWindow : Window
         })();
         """;
 
+    // Ponte per il piazzamento: su Windows, WebView2 e' una vera finestra nativa che
+    // intercetta i click a livello di sistema operativo PRIMA che arrivino ad Avalonia -
+    // OnDesignSurfacePointerPressed non riceve mai l'evento (stesso identico problema, mai
+    // risolto, del vecchio drag&drop nativo che mostrava sempre il cursore "vietato" anche
+    // dopo aver provato a disattivare IsHitTestVisible sulla WebView). Un listener JS
+    // dentro la pagina stessa non ha questo problema: riceve il click e lo rimanda
+    // all'host via lo stesso canale invokeCSharpAction gia' usato per i log della console.
+    // Le coordinate sono relative a #ide-design-surface (generato da FormCodeGenerator),
+    // le stesse usate da LayoutBox.X/Y - non serve nessuna conversione.
+    // Il vecchio OnDesignSurfacePointerPressed (Avalonia) resta attivo in parallelo: se
+    // dovesse ricevere l'evento per primo su una piattaforma dove i click NON sono
+    // intercettati dalla WebView, consuma _armedControlType e questo messaggio arriva
+    // comunque ma non fa nulla (armedControlType gia' null) - nessun doppio piazzamento.
+    private const string ClickForwardingScript = """
+        (function(){
+            if (window.__ideClickHooked) return 'already-hooked';
+            window.__ideClickHooked = true;
+
+            document.addEventListener('click', function (ev) {
+                var el = document.getElementById('ide-design-surface');
+                if (!el) return;
+                var rect = el.getBoundingClientRect();
+                try
+                {
+                    invokeCSharpAction(JSON.stringify({
+                        kind: 'click',
+                        x: ev.clientX - rect.left,
+                        y: ev.clientY - rect.top,
+                    }));
+                }
+                catch (e) {}
+            }, true);
+
+            return 'hooked';
+        })();
+        """;
+
     private async Task InjectConsoleForwardingAsync()
     {
         try
         {
             await DesignerWebView.InvokeScript(ConsoleForwardingScript);
+            await DesignerWebView.InvokeScript(ClickForwardingScript);
         }
         catch (Exception ex)
         {
@@ -303,12 +357,17 @@ public partial class MainWindow : Window
         _armedControlType = (ToolboxList.SelectedItem as ListBoxItem)?.Tag as string;
     }
 
-    private void OnDesignSurfacePointerPressed(object? sender, PointerPressedEventArgs e)
+    private void OnDesignSurfacePointerPressed(object? sender, PointerPressedEventArgs e) =>
+        TryPlaceArmedControlAt(e.GetPosition(DesignSurface));
+
+    // Chiamato dal ponte JS (ClickForwardingScript) quando il click nativo non arriva ad
+    // Avalonia (WebView2 su Windows) - vedi commento su ClickForwardingScript.
+    private void OnDesignSurfaceClickFromWebView(Point position) => TryPlaceArmedControlAt(position);
+
+    private void TryPlaceArmedControlAt(Point position)
     {
         if (_armedControlType is not { } controlType)
             return;
-
-        var position = e.GetPosition(DesignSurface);
 
         // Un solo piazzamento per click sulla Toolbox (coerente con quanto descritto
         // dall'utente): per piazzarne un altro bisogna riselezionarlo.
@@ -662,6 +721,14 @@ public partial class MainWindow : Window
     // nell'ultimo stato valido generato.
     private void RegenerateFiles()
     {
+        // Letto PRIMA di scrivere i file: OnForceRefreshClicked aspettera' che
+        // _watchHost.Generation avanzi oltre questo valore. Catturarlo qui (non al click su
+        // "Aggiorna", che puo' avvenire molto dopo) e' essenziale: dotnet watch elabora la
+        // modifica e avanza la generazione in background indipendentemente da quando/se
+        // l'utente premera' il bottone, e DotnetWatchHost tiene traccia dell'avanzamento
+        // sempre, non solo mentre qualcuno e' in attesa.
+        _pendingSyncGeneration = _watchHost.Generation;
+
         string razorPath, designerCsPath;
         try
         {
@@ -699,21 +766,23 @@ public partial class MainWindow : Window
     // NON azzerare _pendingSync/il bottone "Aggiorna" rosso - non siamo davvero sincronizzati.
     private async Task<bool> ShowDesignerFormAsync()
     {
-        var uri = await _watchHost.WaitForNextRestartAsync(TimeSpan.FromSeconds(20));
-        if (uri is null)
+        var settled = await _watchHost.WaitForBuildSettledAsync(_pendingSyncGeneration, TimeSpan.FromSeconds(20));
+        if (!settled)
         {
             AppendOutput("Timeout in attesa del rebuild di dotnet watch: la pagina potrebbe non essere aggiornata.");
             return false;
         }
+
+        var uri = _watchHost.ServerUri!; // impostato da StartAsync, sempre non-null a questo punto
 
         _currentPagePath = "designerform";
         _isRunning = false; // un'edit nel designer riporta sempre in modalita' di design
 
         if (_designerFormOpened)
         {
-            // Il server e' stato riavviato da dotnet watch ma l'URL e' identico a prima:
-            // riassegnare Source non farebbe nulla (Avalonia salta il PropertyChanged se
-            // il valore non cambia), serve un Refresh esplicito.
+            // Il server potrebbe essere stato riavviato da dotnet watch ma l'URL e'
+            // identico a prima: riassegnare Source non farebbe nulla (Avalonia salta il
+            // PropertyChanged se il valore non cambia), serve un Refresh esplicito.
             DesignerWebView.Refresh();
         }
         else

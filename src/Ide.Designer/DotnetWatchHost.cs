@@ -15,9 +15,7 @@ public sealed class DotnetWatchHost : IDisposable
 
     // Confermato empiricamente (log reali dell'utente): per una modifica a .razor/.razor.cs
     // gia' tracciati, dotnet watch applica l'Hot Reload invece di un riavvio completo -
-    // "Now listening on:" non ricompare MAI in questo caso. WaitForNextRestartAsync
-    // aspettava solo quella riga, quindi andava sempre in timeout (20s) dopo ogni
-    // piazzamento/modifica di proprieta', lasciando la WebView sulla pagina vecchia.
+    // "Now listening on:" non ricompare MAI in questo caso.
     private static readonly Regex HotReloadCompletedRegex =
         new(@"Hot reload of changes (succeeded|failed)\.|No hot reload changes to apply\.", RegexOptions.Compiled);
 
@@ -25,16 +23,30 @@ public sealed class DotnetWatchHost : IDisposable
     // ma dotnet watch a volte li tratta come UN solo evento di modifica (un ciclo di hot
     // reload) e a volte come DUE separati (osservato nei log reali: il primo spesso produce
     // "No hot reload changes to apply." da solo, il secondo, poco dopo, "succeeded.") -
-    // completare al primo segnale rischierebbe di dire "pronto" prima che il secondo file
-    // sia stato davvero applicato. Si aspetta un breve intervallo di silenzio dopo l'ultimo
-    // segnale rilevante prima di considerare il ciclo di build concluso.
+    // avanzare la generazione al primo segnale rischierebbe di dire "pronto" prima che il
+    // secondo file sia stato davvero applicato. Si aspetta un breve intervallo di silenzio
+    // dopo l'ultimo segnale rilevante prima di considerare il ciclo di build concluso.
     private static readonly TimeSpan SignalDebounce = TimeSpan.FromMilliseconds(700);
 
     private Process? _process;
-    private TaskCompletionSource<Uri>? _pendingRestartTcs;
     private CancellationTokenSource? _debounceCts;
+    private TaskCompletionSource? _pendingGenerationTcs;
 
     public Uri? ServerUri { get; private set; }
+
+    /// <summary>
+    /// Contatore incrementato ogni volta che dotnet watch ha finito di elaborare una
+    /// modifica (riavvio completo o ciclo di Hot Reload), SEMPRE - anche se in quel momento
+    /// nessuno sta chiamando <see cref="WaitForBuildSettledAsync"/>. Essenziale per la
+    /// sincronizzazione manuale (bottone "Aggiorna"): con file scritti immediatamente ma
+    /// sincronizzazione posticipata a quando l'utente preme il bottone, il segnale di
+    /// completamento di dotnet watch arriva quasi sempre PRIMA che qualcuno inizi ad
+    /// aspettare - un design "un solo in ascolto alla volta" perderebbe quel segnale per
+    /// sempre, causando un timeout garantito ad ogni pressione del bottone (bug reale
+    /// osservato: introdotto proprio dalla combinazione fra la sync manuale e un fix
+    /// precedente che ignorava i segnali quando nessuno era in attesa).
+    /// </summary>
+    public int Generation { get; private set; }
 
     /// <summary>
     /// Avvia `dotnet watch` sul progetto indicato e attende che Kestrel sia pronto,
@@ -82,18 +94,30 @@ public sealed class DotnetWatchHost : IDisposable
     }
 
     /// <summary>
-    /// Attende che dotnet watch abbia finito di elaborare l'ultima modifica ai file -
-    /// tramite un riavvio completo (nuova "Now listening on:") oppure un ciclo di Hot
-    /// Reload (che non riavvia il processo: <see cref="ServerUri"/> resta invariato). Utile
-    /// dopo aver scritto file che il generatore di codice sa che forzeranno una
-    /// ricompilazione. Se il timeout scade (es. perche' la build e' fallita in un modo che
-    /// non produce nessuno dei due segnali), restituisce null: il chiamante decide come
-    /// procedere.
+    /// Attende che dotnet watch abbia elaborato almeno un cambiamento successivo a
+    /// <paramref name="sinceGeneration"/> (tipicamente <see cref="Generation"/> letto
+    /// subito prima di scrivere i file che si vuole veder riflessi). Se il completamento e'
+    /// gia' avvenuto PRIMA della chiamata (perche' l'utente ha aspettato prima di premere
+    /// "Aggiorna"), ritorna true immediatamente, senza aspettare un nuovo segnale che
+    /// potrebbe non arrivare mai. Ritorna false se il timeout scade senza nessun
+    /// avanzamento (es. perche' la build e' fallita in un modo che non produce ne' un
+    /// riavvio ne' un ciclo di hot reload).
     /// </summary>
-    public async Task<Uri?> WaitForNextRestartAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
+    public async Task<bool> WaitForBuildSettledAsync(int sinceGeneration, TimeSpan timeout, CancellationToken cancellationToken = default)
     {
-        var tcs = new TaskCompletionSource<Uri>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _pendingRestartTcs = tcs;
+        if (Generation > sinceGeneration)
+            return true;
+
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _pendingGenerationTcs = tcs;
+
+        // Ricontrolla dopo aver agganciato il TCS: un avanzamento avvenuto esattamente fra
+        // il check sopra e questa riga non deve andare perso.
+        if (Generation > sinceGeneration)
+        {
+            _pendingGenerationTcs = null;
+            return true;
+        }
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutCts.CancelAfter(timeout);
@@ -101,15 +125,16 @@ public sealed class DotnetWatchHost : IDisposable
 
         try
         {
-            return await tcs.Task.ConfigureAwait(false);
+            await tcs.Task.ConfigureAwait(false);
+            return true;
         }
         catch (TaskCanceledException)
         {
-            return null;
+            return false;
         }
         finally
         {
-            _pendingRestartTcs = null;
+            _pendingGenerationTcs = null;
         }
     }
 
@@ -126,35 +151,29 @@ public sealed class DotnetWatchHost : IDisposable
             var uri = new Uri(match.Groups[1].Value);
             ServerUri = uri;
             readyTcs.TrySetResult(uri);
-            ScheduleRestartSignal();
+            ScheduleGenerationAdvance();
             return;
         }
 
         if (HotReloadCompletedRegex.IsMatch(line))
-            ScheduleRestartSignal();
+            ScheduleGenerationAdvance();
     }
 
-    // (Ri)pianifica il completamento di WaitForNextRestartAsync dopo un breve intervallo di
-    // silenzio: ogni nuovo segnale rilevante annulla e riavvia l'attesa, cosi' due file
-    // scritti quasi insieme (.razor + .razor.designer.cs) ma elaborati da dotnet watch come
-    // eventi separati non completano l'attesa dopo il primo, troppo presto.
-    // Pianifica solo se qualcuno sta davvero aspettando (_pendingRestartTcs non nullo):
-    // altrimenti il debounce del "Now listening on" iniziale (StartAsync, quando nessuno
-    // sta ancora chiamando WaitForNextRestartAsync) potrebbe restare in sospeso e
-    // completare per sbaglio una WaitForNextRestartAsync successiva e scorrelata, appena
-    // questa viene chiamata - visto accadere davvero in un test manuale.
-    private void ScheduleRestartSignal()
+    // (Ri)pianifica l'avanzamento di Generation dopo un breve intervallo di silenzio: ogni
+    // nuovo segnale rilevante annulla e riavvia l'attesa, cosi' due file scritti quasi
+    // insieme (.razor + .razor.designer.cs) ma elaborati da dotnet watch come eventi
+    // separati non avanzano la generazione dopo il primo, troppo presto. A differenza di
+    // una versione precedente di questo codice, avanza SEMPRE (non solo se qualcuno sta
+    // aspettando in quel momento) - vedi il commento su Generation per il perche'.
+    private void ScheduleGenerationAdvance()
     {
-        if (_pendingRestartTcs is null)
-            return;
-
         _debounceCts?.Cancel();
         var cts = new CancellationTokenSource();
         _debounceCts = cts;
-        _ = SignalAfterDebounceAsync(cts.Token);
+        _ = AdvanceGenerationAfterDebounceAsync(cts.Token);
     }
 
-    private async Task SignalAfterDebounceAsync(CancellationToken cancellationToken)
+    private async Task AdvanceGenerationAfterDebounceAsync(CancellationToken cancellationToken)
     {
         try
         {
@@ -165,8 +184,8 @@ public sealed class DotnetWatchHost : IDisposable
             return; // superato da un segnale piu' recente, questa pianificazione e' obsoleta
         }
 
-        if (ServerUri is { } uri)
-            _pendingRestartTcs?.TrySetResult(uri);
+        Generation++;
+        _pendingGenerationTcs?.TrySetResult();
     }
 
     public void Dispose()
