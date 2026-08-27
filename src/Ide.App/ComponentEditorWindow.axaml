@@ -21,13 +21,21 @@
              duplicati insieme, mai uno senza l'altro - vedi ComponentSourceEditor). La tab
              .razor e' la prima/predefinita: e' quella con la logica vera, la classe Visual
              ha gia' un'interfaccia dedicata (la Property Grid) per il caso comune. -->
+        <!-- Background/Foreground espliciti: il pacchetto Avalonia.AvaloniaEdit non include
+             NESSUN tema/stile predefinito (verificato: il suo indice di risorse XAML
+             compilate e' vuoto), quindi senza questo il colore di sfondo resta indefinito
+             (probabile causa di un editor che sembra vuoto pur avendo del testo). -->
         <TabControl>
             <TabItem Header="Componente (.razor)">
                 <ae:TextEditor x:Name="RazorEditor" ShowLineNumbers="True"
+                               HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                               Background="White" Foreground="Black"
                                FontFamily="Consolas,Cascadia Mono,monospace" FontSize="13" />
             </TabItem>
             <TabItem Header="Visual (.cs)">
                 <ae:TextEditor x:Name="VisualEditor" ShowLineNumbers="True"
+                               HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                               Background="White" Foreground="Black"
                                FontFamily="Consolas,Cascadia Mono,monospace" FontSize="13" />
             </TabItem>
         </TabControl>
