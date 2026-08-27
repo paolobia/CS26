@@ -83,6 +83,8 @@ public partial class MainWindow : Window
         // piazzamento, distinti dal campo "kind" nel JSON.
         DesignerWebView.WebMessageReceived += (_, e) =>
         {
+            DebugLog($"WebMessageReceived: body={e.Body ?? "(null)"}");
+
             if (e.Body is null)
                 return;
 
@@ -93,12 +95,14 @@ public partial class MainWindow : Window
                 {
                     var x = doc.RootElement.GetProperty("x").GetDouble();
                     var y = doc.RootElement.GetProperty("y").GetDouble();
+                    DebugLog($"WebMessageReceived: riconosciuto come click, x={x}, y={y}, _armedControlType={_armedControlType ?? "(null)"}");
                     Dispatcher.UIThread.Post(() => OnDesignSurfaceClickFromWebView(new Point(x, y)));
                     return;
                 }
             }
-            catch (JsonException)
+            catch (JsonException ex)
             {
+                DebugLog($"WebMessageReceived: JSON non valido ({ex.Message})");
             }
 
             ConsoleMessage? message = null;
@@ -232,11 +236,14 @@ public partial class MainWindow : Window
     {
         try
         {
-            await DesignerWebView.InvokeScript(ConsoleForwardingScript);
-            await DesignerWebView.InvokeScript(ClickForwardingScript);
+            var consoleResult = await DesignerWebView.InvokeScript(ConsoleForwardingScript);
+            DebugLog($"InjectConsoleForwardingAsync: ConsoleForwardingScript -> {consoleResult}");
+            var clickResult = await DesignerWebView.InvokeScript(ClickForwardingScript);
+            DebugLog($"InjectConsoleForwardingAsync: ClickForwardingScript -> {clickResult}");
         }
         catch (Exception ex)
         {
+            DebugLog($"InjectConsoleForwardingAsync: ECCEZIONE durante l'iniezione: {ex}");
             Console.WriteLine($"[DesignerWebView] Impossibile agganciare la console: {ex.Message}");
         }
     }
@@ -285,6 +292,7 @@ public partial class MainWindow : Window
     // aspetta piu' il rebuild ne' aggiorna la WebView da solo, tocca a questo bottone.
     private async void OnForceRefreshClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
+        DebugLog($"OnForceRefreshClicked: _syncInProgress={_syncInProgress}, _pendingSync={_pendingSync}");
         if (_syncInProgress)
         {
             AppendOutput("Sincronizzazione gia' in corso, attendi il completamento.");
@@ -298,9 +306,19 @@ public partial class MainWindow : Window
         // pattern gia' usato per PublishMenuItem durante il publish.
         ForceRefreshButton.IsEnabled = false;
         BusyOverlay.IsVisible = true;
+        DebugLog("OnForceRefreshClicked: BusyOverlay.IsVisible = true");
         AppendOutput("Sincronizzazione...");
         try
         {
+            // Se WaitForBuildSettledAsync (dentro ShowDesignerFormAsync) trova Generation
+            // gia' avanzata, ritorna vero senza mai sospendere davvero: l'intero metodo
+            // completerebbe nello stesso tick UI in cui e' iniziato, senza che Avalonia
+            // abbia mai avuto occasione di disegnare un frame con l'overlay visibile (regressione
+            // notata dall'utente dopo il fix delle race di Generation, che ha reso il percorso
+            // "gia' sincronizzato" molto piu' frequente). Un giro forzato sul dispatcher a
+            // priorita' di rendering garantisce almeno un frame visibile prima di procedere.
+            await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Render);
+
             DesignerWebView.Refresh();
             if (await ShowDesignerFormAsync())
             {
@@ -313,6 +331,7 @@ public partial class MainWindow : Window
             _syncInProgress = false;
             ForceRefreshButton.IsEnabled = true;
             BusyOverlay.IsVisible = false;
+            DebugLog("OnForceRefreshClicked: BusyOverlay.IsVisible = false");
         }
     }
 
@@ -361,19 +380,33 @@ public partial class MainWindow : Window
     private void OnToolboxSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
         _armedControlType = (ToolboxList.SelectedItem as ListBoxItem)?.Tag as string;
+        DebugLog($"OnToolboxSelectionChanged: SelectedItem={ToolboxList.SelectedItem?.GetType().Name ?? "(null)"}, _armedControlType={_armedControlType ?? "(null)"}");
     }
 
-    private void OnDesignSurfacePointerPressed(object? sender, PointerPressedEventArgs e) =>
-        TryPlaceArmedControlAt(e.GetPosition(DesignSurface));
+    private void OnDesignSurfacePointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        var position = e.GetPosition(DesignSurface);
+        DebugLog($"OnDesignSurfacePointerPressed (Avalonia): position=({position.X},{position.Y}), _armedControlType={_armedControlType ?? "(null)"}");
+        TryPlaceArmedControlAt(position);
+    }
 
     // Chiamato dal ponte JS (ClickForwardingScript) quando il click nativo non arriva ad
     // Avalonia (WebView2 su Windows) - vedi commento su ClickForwardingScript.
-    private void OnDesignSurfaceClickFromWebView(Point position) => TryPlaceArmedControlAt(position);
+    private void OnDesignSurfaceClickFromWebView(Point position)
+    {
+        DebugLog($"OnDesignSurfaceClickFromWebView (ponte JS): position=({position.X},{position.Y}), _armedControlType={_armedControlType ?? "(null)"}");
+        TryPlaceArmedControlAt(position);
+    }
 
     private void TryPlaceArmedControlAt(Point position)
     {
         if (_armedControlType is not { } controlType)
+        {
+            DebugLog("TryPlaceArmedControlAt: nessun controllo armato, ignoro il click.");
             return;
+        }
+
+        DebugLog($"TryPlaceArmedControlAt: piazzo controlType={controlType} a ({position.X},{position.Y})");
 
         // Un solo piazzamento per click sulla Toolbox (coerente con quanto descritto
         // dall'utente): per piazzarne un altro bisogna riselezionarlo.
@@ -390,6 +423,8 @@ public partial class MainWindow : Window
     // proprieta'.
     private void PlaceControl(string controlType, Point position)
     {
+        DebugLog($"PlaceControl: controlType={controlType}, position=({position.X},{position.Y}), _projectDirectory={_projectDirectory ?? "(null)"}");
+
         if (_projectDirectory is null)
         {
             AppendOutput("Piazzamento ignorato: il progetto Blazor non e' ancora pronto.");
@@ -412,6 +447,7 @@ public partial class MainWindow : Window
         PlacedControlsList.SelectedItem = fieldName; // mostra subito le sue proprieta' nella grid
 
         AppendOutput($"Aggiunto {fieldName} ({controlType})");
+        DebugLog($"PlaceControl: creato {fieldName}, LayoutBox=({visual.LayoutBox.X},{visual.LayoutBox.Y},{visual.LayoutBox.Width}x{visual.LayoutBox.Height})");
 
         RegenerateFiles();
     }
@@ -734,6 +770,7 @@ public partial class MainWindow : Window
         // l'utente premera' il bottone, e DotnetWatchHost tiene traccia dell'avanzamento
         // sempre, non solo mentre qualcuno e' in attesa.
         _pendingSyncGeneration = _watchHost.Generation;
+        DebugLog($"RegenerateFiles: _pendingSyncGeneration catturato = {_pendingSyncGeneration}, controlli={_placedControls.Count}");
 
         string razorPath, designerCsPath;
         try
@@ -743,11 +780,13 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            DebugLog($"RegenerateFiles: ECCEZIONE nella generazione: {ex}");
             AppendOutput($"Errore nella generazione del form: {ex.Message}");
             return;
         }
 
         AppendOutput($"Generato -> {Path.GetFileName(razorPath)}, {Path.GetFileName(designerCsPath)}");
+        DebugLog($"RegenerateFiles: file scritti con successo ({razorPath}, {designerCsPath})");
 
         _pendingSync = true;
         UpdateSyncButtonState();
@@ -772,11 +811,14 @@ public partial class MainWindow : Window
     // NON azzerare _pendingSync/il bottone "Aggiorna" rosso - non siamo davvero sincronizzati.
     private async Task<bool> ShowDesignerFormAsync()
     {
+        DebugLog($"ShowDesignerFormAsync: attendo Generation > {_pendingSyncGeneration} (attuale={_watchHost.Generation})");
+
         // 60s (non 20): il primo controllo piazzato crea Pages/DesignerForm.razor come file
         // NUOVO, che forza un riavvio completo di dotnet watch (non un hot reload) - un
         // riavvio a freddo (restore+build da zero) puo' richiedere piu' di 20s su una
         // macchina piu' lenta o al primo avvio (nessuna cache di build gia' scaldata).
         var settled = await _watchHost.WaitForBuildSettledAsync(_pendingSyncGeneration, TimeSpan.FromSeconds(60));
+        DebugLog($"ShowDesignerFormAsync: WaitForBuildSettledAsync -> settled={settled}, Generation ora={_watchHost.Generation}");
         if (!settled)
         {
             AppendOutput("Timeout in attesa del rebuild di dotnet watch: la pagina potrebbe non essere aggiornata.");
@@ -784,6 +826,7 @@ public partial class MainWindow : Window
         }
 
         var uri = _watchHost.ServerUri!; // impostato da StartAsync, sempre non-null a questo punto
+        DebugLog($"ShowDesignerFormAsync: navigo verso {uri}");
 
         _currentPagePath = "designerform";
         _isRunning = false; // un'edit nel designer riporta sempre in modalita' di design
@@ -899,6 +942,15 @@ public partial class MainWindow : Window
         }
     }
 
+    // Traccia di debug per l'intera catena click-to-place (selezione Toolbox -> click,
+    // via Avalonia o via il ponte JS -> piazzamento -> sincronizzazione): visibile sul
+    // terminale da cui parte l'IDE (dotnet run / Ide.App.exe da riga di comando), non nel
+    // pannello Output. Serve a capire ESATTAMENTE dove si interrompe la catena su una
+    // macchina reale, invece di continuare a ipotizzare - vanno letti in ordine con
+    // timestamp per capire quali passaggi avvengono e quali no.
+    private static void DebugLog(string message) =>
+        Console.WriteLine($"[DEBUG {DateTime.Now:HH:mm:ss.fff}] {message}");
+
     private void AppendOutput(string line)
     {
         OutputTextBox.Text = OutputTextBox.Text is { Length: > 0 } existing
@@ -935,9 +987,11 @@ public partial class MainWindow : Window
         LoadComponents(); // solo file locali, non serve attendere che dotnet watch sia pronto
 
         BusyOverlay.IsVisible = true;
+        DebugLog("StartDesignerAsync: BusyOverlay.IsVisible = true, avvio dotnet watch...");
         try
         {
             var uri = await _watchHost.StartAsync(_projectDirectory, "http://localhost:5245");
+            DebugLog($"StartDesignerAsync: dotnet watch pronto su {uri}");
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 DesignerWebView.Source = BuildUri(uri, design: true);
@@ -951,6 +1005,7 @@ public partial class MainWindow : Window
         finally
         {
             BusyOverlay.IsVisible = false;
+            DebugLog("StartDesignerAsync: BusyOverlay.IsVisible = false");
         }
     }
 
