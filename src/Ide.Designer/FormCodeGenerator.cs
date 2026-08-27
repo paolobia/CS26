@@ -46,19 +46,26 @@ public static class FormCodeGenerator
         // e' l'unico punto che legge l'URL, i componenti a valle si limitano a consumarlo
         // (modulo 13 - primo uso reale del flag ?design=true introdotto nel modulo 10).
         sb.AppendLine("<CascadingValue Value=\"IsDesignMode\">");
-        sb.AppendLine("""<div style="position:relative;width:100%;height:600px;">""");
+        // Griglia di allineamento visiva, solo in design mode (vincolo architetturale n.5:
+        // stesso bundle, pilotato da un flag - niente puntini nell'app reale a runtime).
+        // La dimensione (16px) deve corrispondere a GridSize in MainWindow.axaml.cs (snap
+        // al piazzamento), altrimenti i controlli non cadrebbero visivamente sui puntini.
+        // GridBackgroundStyle (in GenerateDesignerCs) invece di un ternario inline: un
+        // ternario con stringhe letterali dentro un attributo HTML gia' delimitato da
+        // doppi apici romperebbe il parsing Razor (apici annidati).
+        sb.AppendLine("""<div style="position:relative;width:100%;height:600px;@GridBackgroundStyle">""");
         foreach (var control in controls)
         {
-            // Modulo 9 (generalizzato): il markup collega l'evento solo se e' di tipo
-            // "WireInMarkup" (es. VbButton.OnClick, un EventCallback) e il doppio click ha
-            // gia' generato l'handler in {Form}.Behavior.cs - altrimenti il metodo non
-            // esisterebbe ancora e la compilazione fallirebbe. Gli eventi code-behind (es.
-            // VbTimer.Tick) vengono collegati in GenerateDesignerCs, non qui.
-            var eventInfo = ComponentEventInfo.For(control.ControlType);
-            var eventAttribute = eventInfo is { WireInMarkup: true } && control.HasEventHandler
-                ? $" {eventInfo.EventName}=\"{control.FieldName}{eventInfo.MethodSuffix}\""
-                : string.Empty;
-            sb.AppendLine($"    <{control.ControlType} Visual=\"{control.FieldName}\"{eventAttribute} />");
+            // Modulo 9 (generalizzato a N eventi per controllo, non piu' uno solo): il
+            // markup collega un evento solo se e' di tipo "WireInMarkup" (es. VbButton.OnClick,
+            // un EventCallback) e ha gia' del codice non-vuoto in {Form}.Behavior.cs
+            // (control.WiredMethods) - altrimenti il metodo non esisterebbe ancora e la
+            // compilazione fallirebbe. Gli eventi code-behind (es. VbTimer.Tick) vengono
+            // collegati in GenerateDesignerCs, non qui.
+            var eventAttributes = ComponentEventInfo.ForAll(control.ControlType)
+                .Where(info => info.WireInMarkup && control.WiredMethods.Contains(info.EventName))
+                .Select(info => $" {info.EventName}=\"{control.FieldName}{info.MethodSuffix}\"");
+            sb.AppendLine($"    <{control.ControlType} Visual=\"{control.FieldName}\"{string.Concat(eventAttributes)} />");
         }
         sb.AppendLine("</div>");
         sb.AppendLine("</CascadingValue>");
@@ -80,7 +87,11 @@ public static class FormCodeGenerator
         sb.AppendLine();
         sb.AppendLine($"namespace {razorNamespace};");
         sb.AppendLine();
-        sb.AppendLine($"public partial class {formName}");
+        // Implementa sempre IDisposable, a prescindere da quanti Distruttori sono cablati
+        // oggi: cosi' l'interfaccia non compare/sparisce a seconda di cosa l'utente
+        // scrive nella property grid, il che potrebbe rompere codice in {Form}.Behavior.cs
+        // scritto nel frattempo presupponendo che IDisposable ci sia.
+        sb.AppendLine($"public partial class {formName} : IDisposable");
         sb.AppendLine("{");
 
         // Modulo 13: IsDesignMode letto una sola volta qui e ridistribuito via
@@ -89,6 +100,14 @@ public static class FormCodeGenerator
         sb.AppendLine("    protected NavigationManager NavigationManager { get; set; } = default!;");
         sb.AppendLine();
         sb.AppendLine("    protected bool IsDesignMode => NavigationManager.Uri.Contains(\"design=true\", StringComparison.OrdinalIgnoreCase);");
+        sb.AppendLine();
+        // Griglia di allineamento visiva, solo in design mode (vincolo architetturale n.5:
+        // stesso bundle, pilotato da un flag - niente puntini nell'app reale a runtime). La
+        // dimensione (16px) deve corrispondere a GridSize in MainWindow.axaml.cs (snap al
+        // piazzamento), altrimenti i controlli non cadrebbero visivamente sui puntini.
+        sb.AppendLine("    protected string GridBackgroundStyle => IsDesignMode");
+        sb.AppendLine("        ? \"background-image:radial-gradient(circle, #bbb 1px, transparent 1px); background-size:16px 16px;\"");
+        sb.AppendLine("        : string.Empty;");
         sb.AppendLine();
 
         foreach (var control in controls)
@@ -106,22 +125,34 @@ public static class FormCodeGenerator
 
         // Eventi code-behind (es. VbTimer.Tick, un vero event .NET sull'istanza "Visual",
         // a differenza di VbButton.OnClick che e' un parametro Blazor collegato nel .razor):
-        // tutti quelli attivi per questo form condividono un solo OnInitialized generato.
+        // tutti quelli attivi per questo form condividono un solo OnInitialized generato,
+        // insieme alle chiamate ai Costruttori (sempre disponibili, indipendenti dal tipo).
+        var constructorWiring = controls.Where(c => c.WiredMethods.Contains(SpecialMethodNames.Constructor)).ToList();
+        var destructorWiring = controls.Where(c => c.WiredMethods.Contains(SpecialMethodNames.Destructor)).ToList();
         var codeBehindWiring = controls
-            .Select(c => (Control: c, Info: ComponentEventInfo.For(c.ControlType)))
-            .Where(x => x is { Info.WireInMarkup: false, Control.HasEventHandler: true })
+            .SelectMany(c => ComponentEventInfo.ForAll(c.ControlType)
+                .Where(info => !info.WireInMarkup && c.WiredMethods.Contains(info.EventName))
+                .Select(info => (Control: c, Info: info)))
             .ToList();
 
-        if (codeBehindWiring.Count > 0)
+        if (constructorWiring.Count > 0 || codeBehindWiring.Count > 0)
         {
             sb.AppendLine("    protected override void OnInitialized()");
             sb.AppendLine("    {");
             sb.AppendLine("        base.OnInitialized();");
+            foreach (var control in constructorWiring)
+                sb.AppendLine($"        {SpecialMethodNames.ConstructorMethodName(control.FieldName)}();");
             foreach (var (control, info) in codeBehindWiring)
-                sb.AppendLine($"        {control.FieldName}.{info!.EventName} += {control.FieldName}{info.MethodSuffix};");
+                sb.AppendLine($"        {control.FieldName}.{info.EventName} += {control.FieldName}{info.MethodSuffix};");
             sb.AppendLine("    }");
             sb.AppendLine();
         }
+
+        sb.AppendLine("    public void Dispose()");
+        sb.AppendLine("    {");
+        foreach (var control in destructorWiring)
+            sb.AppendLine($"        {SpecialMethodNames.DestructorMethodName(control.FieldName)}();");
+        sb.AppendLine("    }");
 
         sb.AppendLine("}");
 

@@ -6,9 +6,12 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Media;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Ide.Designer;
 using VbControls.Abstractions;
 
@@ -18,6 +21,13 @@ public partial class MainWindow : Window
 {
     private const string FormName = "DesignerForm";
     private const string FormNamespace = "BlazorPwaTemplate.Pages";
+
+    // Deve corrispondere alla dimensione della griglia di sfondo generata in
+    // FormCodeGenerator.GenerateDesignerCs (GridBackgroundStyle), altrimenti i controlli
+    // non cadrebbero visivamente sui puntini.
+    private const double GridSize = 16;
+
+    private static double SnapToGrid(double value) => Math.Round(value / GridSize) * GridSize;
 
     private readonly DotnetWatchHost _watchHost = new();
     private readonly ComponentPluginLoader _componentLoader = new();
@@ -30,6 +40,10 @@ public partial class MainWindow : Window
     private string _currentPagePath = string.Empty; // "" = home, "designerform" = form generato
     private bool _isRunning;
     private bool _publishInProgress;
+    private bool _syncInProgress;
+    private bool _pendingSync;
+    private ScrollViewer? _outputScrollViewer;
+    private bool _outputAutoScroll = true;
 
     public MainWindow()
     {
@@ -48,7 +62,20 @@ public partial class MainWindow : Window
         // o F12 dove il motore nativo lo supporta. Nessuna API cross-platform per
         // "aprirli ora" da codice: EnableDevTools sblocca la voce nel menu contestuale
         // nativo della WebView stessa.
-        DesignerWebView.EnvironmentRequested += (_, e) => e.EnableDevTools = true;
+        // Su Linux, Avalonia.Controls.WebView usa di default l'adapter GTK a finestra
+        // nativa: una finestra nativa embedded disegna sempre sopra qualunque contenuto
+        // Avalonia gestito che le si sovrapponga, indipendentemente dall'ordine Z
+        // dichiarato ("airspace problem") - ne soffrono sia il BusyOverlay sopra la
+        // WebView sia il popup a tendina del menu quando si estende sopra la sua area.
+        // ExperimentalOffscreen forza l'adapter compositato invece di quello a finestra,
+        // risolvendo il problema alla radice. E' marcata "Experimental" dal pacchetto
+        // stesso: se risultasse instabile su un desktop reale, rimuovere questo blocco if.
+        DesignerWebView.EnvironmentRequested += (_, e) =>
+        {
+            e.EnableDevTools = true;
+            if (e is Avalonia.Platform.GtkWebViewEnvironmentRequestedEventArgs gtk)
+                gtk.ExperimentalOffscreen = true;
+        };
 
         // Modulo 11: inoltra console.log/warn/error e gli errori JS non gestiti della
         // pagina reale nel pannello Output, tramite lo stesso canale invokeCSharpAction
@@ -86,8 +113,20 @@ public partial class MainWindow : Window
         // DoubleTapped, serve handledEventsToo per intercettarlo comunque.
         PlacedControlsList.AddHandler(InputElement.DoubleTappedEvent, OnPlacedControlDoubleTapped, handledEventsToo: true);
 
-        DesignSurface.AddHandler(DragDrop.DragOverEvent, OnDesignSurfaceDragOver);
-        DesignSurface.AddHandler(DragDrop.DropEvent, OnDesignSurfaceDrop);
+        // handledEventsToo: la WebView dentro DesignSurface intercetta gli eventi pointer
+        // per l'interazione con la pagina e li marca come gestiti - senza questo il click
+        // sulla superficie non arriverebbe mai qui (stesso motivo per cui il vecchio
+        // drag&drop nativo non funzionava in modo affidabile).
+        DesignSurface.AddHandler(InputElement.PointerPressedEvent, OnDesignSurfacePointerPressed, handledEventsToo: true);
+
+        // Auto-scroll del pannello Output: si aggancia allo ScrollViewer interno del
+        // TextBox solo dopo che il template e' stato applicato (non e' disponibile prima).
+        OutputTextBox.AttachedToVisualTree += (_, _) =>
+        {
+            _outputScrollViewer = OutputTextBox.FindDescendantOfType<ScrollViewer>();
+            if (_outputScrollViewer is not null)
+                _outputScrollViewer.PropertyChanged += OnOutputScrollChanged;
+        };
 
         // Modulo 10: F5 = Run, esce dalla modalita' di design (vincolo architetturale n.5:
         // design mode e run mode sono lo stesso bundle, pilotato da un flag in query string).
@@ -180,7 +219,6 @@ public partial class MainWindow : Window
             _componentTypesByControlType[component.ControlType] = component.VisualType;
 
             var item = new ListBoxItem { Tag = component.ControlType, Content = $"{component.Icon} {component.DisplayName}" };
-            item.AddHandler(PointerPressedEvent, OnToolboxItemPointerPressed, handledEventsToo: true);
             ToolboxList.Items.Add(item);
         }
 
@@ -189,53 +227,118 @@ public partial class MainWindow : Window
 
     private void OnReloadComponentsClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => LoadComponents();
 
-    // Modulo 6: avvio del drag da un elemento della Toolbox. Nessuna persistenza su file
-    // ancora (quella e' il modulo 7, il generatore di codice): qui si trasporta solo il
-    // nome del tipo di controllo trascinato, come testo semplice (DataFormat.Text).
-    private async void OnToolboxItemPointerPressed(object? sender, PointerPressedEventArgs e)
+    // Punto unico di sincronizzazione con la WebView: scrivere i file (RegenerateFiles) non
+    // aspetta piu' il rebuild ne' aggiorna la WebView da solo, tocca a questo bottone.
+    private async void OnForceRefreshClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (sender is not Control { Tag: string controlType })
-            return;
-
-        var item = new DataTransferItem();
-        item.Set(DataFormat.Text, controlType);
-
-        var data = new DataTransfer();
-        data.Add(item);
-
-        await DragDrop.DoDragDropAsync(e, data, DragDropEffects.Copy);
-    }
-
-    private void OnDesignSurfaceDragOver(object? sender, DragEventArgs e)
-    {
-        e.DragEffects = e.DataTransfer.Contains(DataFormat.Text) ? DragDropEffects.Copy : DragDropEffects.None;
-    }
-
-    // Modulo 7: il drop genera davvero i due file posseduti dal designer
-    // (DesignerForm.razor / DesignerForm.razor.designer.cs), a partire dall'istanza
-    // reale dell'aspetto (IDesignComponent - visuale o non-visuale, modulo 13) creata
-    // qui: e' la stessa istanza su cui la Property Grid (modulo 8) riflette per
-    // mostrarne ed editarne le proprieta'.
-    private async void OnDesignSurfaceDrop(object? sender, DragEventArgs e)
-    {
-        if (e.DataTransfer.TryGetText() is not { } controlType)
-            return;
-
-        if (_projectDirectory is null)
+        if (_syncInProgress)
         {
-            AppendOutput("Drop ignorato: il progetto Blazor non e' ancora pronto.");
+            AppendOutput("Sincronizzazione gia' in corso, attendi il completamento.");
             return;
         }
 
+        _syncInProgress = true;
+        BusyOverlay.IsVisible = true;
+        AppendOutput("Sincronizzazione...");
+        try
+        {
+            DesignerWebView.Refresh();
+            if (await ShowDesignerFormAsync())
+            {
+                _pendingSync = false;
+                UpdateSyncButtonState();
+            }
+        }
+        finally
+        {
+            _syncInProgress = false;
+            BusyOverlay.IsVisible = false;
+        }
+    }
+
+    // Confermato empiricamente (anche dall'utente): ne' la WebView ne' la property grid si
+    // ridisegnano da sole dopo un aggiornamento - serve un resize manuale della finestra.
+    // Colpisce entrambe (la WebView e un pannello Avalonia nativo separato), quindi non e'
+    // un problema del solo controllo WebView ma piu' probabilmente del compositor/driver
+    // grafico di questo ambiente: InvalidateMeasure/Arrange/Visual mirati non bastano.
+    // Si imita l'identico effetto di un resize reale (che si sa gia' funzionare) invece di
+    // inseguire invalidazioni puntuali: allarga la finestra di 1px e la riporta indietro
+    // un istante dopo, dando ad Avalonia il tempo di completare il ciclo di
+    // misura/arrangiamento/repaint per la dimensione intermedia.
+    private void InvalidateDesignerWebViewDisplay()
+    {
+        var originalWidth = Width;
+        Width = originalWidth + 1;
+        Dispatcher.UIThread.Post(() => Width = originalWidth, DispatcherPriority.Background);
+    }
+
+    // Rimuove il controllo selezionato e rigenera il form: FormCodeGenerator.Generate
+    // riscrive sempre da zero a partire dall'intera lista _placedControls, quindi togliere
+    // l'elemento prima di rigenerare basta. Se il controllo aveva gia' un handler evento in
+    // {Form}.Behavior.cs (file mai riscritto automaticamente), lo stub resta orfano: comportamento
+    // accettato, analogo a VB6/Delphi.
+    private void OnDeletePlacedControlClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (PlacedControlsList.SelectedItem is not string fieldName)
+            return;
+
+        _placedControls.RemoveAll(c => c.FieldName == fieldName);
+        PlacedControlsList.Items.Remove(fieldName);
+        PropertyEditorsPanel.Children.Clear();
+
+        AppendOutput($"Rimosso {fieldName}");
+
+        RegenerateFiles();
+    }
+
+    // Sostituisce il drag&drop nativo (DragDrop.DoDragDropAsync), rivelatosi inaffidabile
+    // su desktop reale (cursore sempre "vietato", causa mai isolata con certezza nonostante
+    // due tentativi di fix mirati): un click su un elemento della Toolbox lo "arma", il
+    // click successivo sulla superficie di design lo piazza li'. Piu' semplice, niente API
+    // nativa di drag&drop coinvolta.
+    private string? _armedControlType;
+
+    private void OnToolboxSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        _armedControlType = (ToolboxList.SelectedItem as ListBoxItem)?.Tag as string;
+    }
+
+    private void OnDesignSurfacePointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (_armedControlType is not { } controlType)
+            return;
+
         var position = e.GetPosition(DesignSurface);
+
+        // Un solo piazzamento per click sulla Toolbox (coerente con quanto descritto
+        // dall'utente): per piazzarne un altro bisogna riselezionarlo.
+        _armedControlType = null;
+        ToolboxList.SelectedItem = null;
+
+        PlaceControl(controlType, position);
+    }
+
+    // Modulo 7: genera davvero i due file posseduti dal designer (DesignerForm.razor /
+    // DesignerForm.razor.designer.cs), a partire dall'istanza reale dell'aspetto
+    // (IDesignComponent - visuale o non-visuale, modulo 13) creata qui: e' la stessa
+    // istanza su cui la Property Grid (modulo 8) riflette per mostrarne ed editarne le
+    // proprieta'.
+    private void PlaceControl(string controlType, Point position)
+    {
+        if (_projectDirectory is null)
+        {
+            AppendOutput("Piazzamento ignorato: il progetto Blazor non e' ancora pronto.");
+            return;
+        }
+
         var fieldName = NextFieldName(controlType);
 
         // Le dimensioni di default vengono dal costruttore del componente stesso (ogni
         // Visual imposta la propria LayoutBox di default): il designer sa solo dove e'
-        // stato rilasciato, non quanto deve essere grande.
+        // stato cliccato, non quanto deve essere grande.
         var visual = CreateVisual(controlType);
-        visual.LayoutBox.X = Math.Max(0, position.X - visual.LayoutBox.Width / 2);
-        visual.LayoutBox.Y = Math.Max(0, position.Y - visual.LayoutBox.Height / 2);
+        visual.LayoutBox.X = SnapToGrid(Math.Max(0, position.X - visual.LayoutBox.Width / 2));
+        visual.LayoutBox.Y = SnapToGrid(Math.Max(0, position.Y - visual.LayoutBox.Height / 2));
 
         var placed = new PlacedControl(fieldName, controlType, visual);
         _placedControls.Add(placed);
@@ -245,7 +348,7 @@ public partial class MainWindow : Window
 
         AppendOutput($"Aggiunto {fieldName} ({controlType})");
 
-        await RegenerateAndReloadAsync();
+        RegenerateFiles();
     }
 
     // Modulo 14: il tipo concreto non e' piu' noto a compile-time di Ide.App - viene
@@ -296,14 +399,54 @@ public partial class MainWindow : Window
     // nell'elenco, ricostruisce gli editor per le sue proprieta' [VisualProperty].
     private void OnPlacedControlSelected(object? sender, SelectionChangedEventArgs e)
     {
-        PropertyEditorsPanel.Children.Clear();
-
         if (PlacedControlsList.SelectedItem is not string fieldName)
+        {
+            PropertyEditorsPanel.Children.Clear();
             return;
+        }
 
         var placed = _placedControls.FirstOrDefault(c => c.FieldName == fieldName);
         if (placed is null)
+        {
+            PropertyEditorsPanel.Children.Clear();
             return;
+        }
+
+        RefreshPropertyGrid(placed);
+    }
+
+    // Fattorizzato fuori da OnPlacedControlSelected per poter aggiornare la grid (in
+    // particolare le preview "<N righe>"/"<vuoto>" della sezione Metodi) anche dopo un
+    // salvataggio dal modale (OpenMethodEditorAsync), non solo al cambio di selezione.
+    private void RefreshPropertyGrid(PlacedControl placed)
+    {
+        PropertyEditorsPanel.Children.Clear();
+
+        // Griglia a due colonne (nome | editor), non piu' impilati verticalmente come uno
+        // StackPanel: piu' compatta e piu' leggibile come una vera property grid.
+        PropertyEditorsPanel.RowDefinitions.Clear();
+        var row = 0;
+
+        // "Nome" sempre in cima, presa da FieldName (non da [VisualProperty] come le altre
+        // proprieta') e sola lettura: rinominare un controllo gia' piazzato richiederebbe
+        // un refactoring coordinato di tutti i file generati + il codice sviluppatore che
+        // referenzia il vecchio nome - fuori scope per ora.
+        PropertyEditorsPanel.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+        var nameLabel = new TextBlock
+        {
+            Text = "Nome",
+            Margin = new Avalonia.Thickness(0, 0, 8, 0),
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+        };
+        Grid.SetRow(nameLabel, row);
+        Grid.SetColumn(nameLabel, 0);
+        PropertyEditorsPanel.Children.Add(nameLabel);
+
+        var nameValue = new TextBox { Text = placed.FieldName, IsReadOnly = true, Opacity = 0.7 };
+        Grid.SetRow(nameValue, row);
+        Grid.SetColumn(nameValue, 1);
+        PropertyEditorsPanel.Children.Add(nameValue);
+        row++;
 
         string? currentCategory = null;
         foreach (var property in VisualPropertyReader.GetEditableProperties(placed.Visual))
@@ -315,32 +458,49 @@ public partial class MainWindow : Window
 
             if (category != currentCategory)
             {
-                PropertyEditorsPanel.Children.Add(new TextBlock
+                PropertyEditorsPanel.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+                var header = new TextBlock
                 {
                     Text = category,
                     FontWeight = Avalonia.Media.FontWeight.Bold,
-                    Margin = new Avalonia.Thickness(0, 8, 0, 0),
-                });
+                    Margin = new Avalonia.Thickness(0, 8, 0, 2),
+                };
+                Grid.SetRow(header, row);
+                Grid.SetColumn(header, 0);
+                Grid.SetColumnSpan(header, 2);
+                PropertyEditorsPanel.Children.Add(header);
                 currentCategory = category;
+                row++;
             }
 
-            PropertyEditorsPanel.Children.Add(new TextBlock { Text = property.Name });
+            PropertyEditorsPanel.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+
+            var label = new TextBlock
+            {
+                Text = property.Name,
+                Margin = new Avalonia.Thickness(0, 0, 8, 0),
+                VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            };
+            Grid.SetRow(label, row);
+            Grid.SetColumn(label, 0);
+            PropertyEditorsPanel.Children.Add(label);
 
             var currentValue = property.GetValue(placed.Visual);
+            Control editor;
             if (property.PropertyType == typeof(bool))
             {
                 var checkBox = new CheckBox { IsChecked = currentValue as bool? };
-                checkBox.IsCheckedChanged += async (_, _) =>
+                checkBox.IsCheckedChanged += (_, _) =>
                 {
                     property.SetValue(placed.Visual, checkBox.IsChecked ?? false);
-                    await RegenerateAndReloadAsync();
+                    RegenerateFiles();
                 };
-                PropertyEditorsPanel.Children.Add(checkBox);
+                editor = checkBox;
             }
             else
             {
                 var textBox = new TextBox { Text = currentValue?.ToString() ?? string.Empty };
-                textBox.LostFocus += async (_, _) =>
+                textBox.LostFocus += (_, _) =>
                 {
                     // Il testo digitato e' sempre una string: per proprieta' non-string
                     // (es. int IntervalMs) va convertita al tipo reale prima di SetValue,
@@ -354,18 +514,122 @@ public partial class MainWindow : Window
                     }
 
                     property.SetValue(placed.Visual, converted);
-                    await RegenerateAndReloadAsync();
+                    RegenerateFiles();
                 };
-                PropertyEditorsPanel.Children.Add(textBox);
+                editor = textBox;
             }
+
+            Grid.SetRow(editor, row);
+            Grid.SetColumn(editor, 1);
+            PropertyEditorsPanel.Children.Add(editor);
+            row++;
         }
+
+        // Separatore visivo fra "Proprieta'" e "Metodi".
+        PropertyEditorsPanel.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+        var separator = new Border { Height = 1, Background = Avalonia.Media.Brushes.Gray, Margin = new Avalonia.Thickness(0, 8, 0, 8) };
+        Grid.SetRow(separator, row);
+        Grid.SetColumn(separator, 0);
+        Grid.SetColumnSpan(separator, 2);
+        PropertyEditorsPanel.Children.Add(separator);
+        row++;
+
+        PropertyEditorsPanel.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+        var methodsHeader = new TextBlock { Text = "Metodi", FontWeight = Avalonia.Media.FontWeight.Bold };
+        Grid.SetRow(methodsHeader, row);
+        Grid.SetColumn(methodsHeader, 0);
+        Grid.SetColumnSpan(methodsHeader, 2);
+        PropertyEditorsPanel.Children.Add(methodsHeader);
+        row++;
+
+        var pagesDirectory = Path.Combine(_projectDirectory!, "Pages");
+        var behaviorPath = Path.Combine(pagesDirectory, $"{FormName}.Behavior.cs");
+
+        // Costruttore/Distruttore sono universali (ogni controllo li ha, indipendentemente
+        // dal tipo), poi seguono gli eventi specifici del tipo (nessuno, per i componenti
+        // che ancora non ne espongono, es. VbLabel).
+        var methodRows = new List<(string DisplayName, string ActualMethodName, bool IsAsync)>
+        {
+            (SpecialMethodNames.Constructor, SpecialMethodNames.ConstructorMethodName(placed.FieldName), false),
+            (SpecialMethodNames.Destructor, SpecialMethodNames.DestructorMethodName(placed.FieldName), false),
+        };
+        methodRows.AddRange(ComponentEventInfo.ForAll(placed.ControlType)
+            .Select(info => (info.EventName, $"{placed.FieldName}{info.MethodSuffix}", info.IsAsync)));
+
+        foreach (var (displayName, actualMethodName, isAsync) in methodRows)
+        {
+            PropertyEditorsPanel.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+
+            var methodLabel = new TextBlock
+            {
+                Text = displayName,
+                Margin = new Avalonia.Thickness(0, 0, 8, 0),
+                VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            };
+            Grid.SetRow(methodLabel, row);
+            Grid.SetColumn(methodLabel, 0);
+            PropertyEditorsPanel.Children.Add(methodLabel);
+
+            var methodInfo = MethodBodyEditor.ReadMethod(behaviorPath, actualMethodName);
+            var previewBlock = new TextBlock
+            {
+                Text = methodInfo.Exists ? $"<{methodInfo.LineCount} righe>" : "<vuoto>",
+                VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            };
+            Grid.SetRow(previewBlock, row);
+            Grid.SetColumn(previewBlock, 1);
+            PropertyEditorsPanel.Children.Add(previewBlock);
+
+            // TextBlock espone gia' l'evento routed DoubleTapped, non serve il pattern
+            // AddHandler(..., handledEventsToo: true) usato per PlacedControlsList (quello
+            // serviva perche' il ListBoxItem sottostante marcava l'evento come Handled).
+            methodLabel.DoubleTapped += async (_, _) => await OpenMethodEditorAsync(placed, displayName, actualMethodName, isAsync);
+            previewBlock.DoubleTapped += async (_, _) => await OpenMethodEditorAsync(placed, displayName, actualMethodName, isAsync);
+
+            row++;
+        }
+
+        // Selezionare un controllo gia' piazzato non passa da RegenerateFiles/OnForceRefreshClicked
+        // (che fanno gia' il nudge di ridisegno per altri casi): senza questo, la grid appena
+        // popolata non si vedrebbe finche' non succede qualcos'altro che forzi un repaint.
+        InvalidateDesignerWebViewDisplay();
+    }
+
+    // Apre il modale di editing per un metodo (evento del tipo, Costruttore o Distruttore):
+    // legge il corpo attuale, e se l'utente non annulla lo scrive (MethodBodyEditor),
+    // aggiorna WiredMethods (svuotare il corpo "scollega" l'evento) e rigenera i file -
+    // niente refresh automatico della WebView, coerente col bottone "Aggiorna" manuale.
+    private async Task OpenMethodEditorAsync(PlacedControl placed, string displayName, string actualMethodName, bool isAsync)
+    {
+        var pagesDirectory = Path.Combine(_projectDirectory!, "Pages");
+        var behaviorPath = Path.Combine(pagesDirectory, $"{FormName}.Behavior.cs");
+        var current = MethodBodyEditor.ReadMethod(behaviorPath, actualMethodName);
+
+        var dialog = new MethodEditorWindow($"{placed.FieldName}.{displayName}", current.Body);
+        var result = await dialog.ShowDialog<string?>(this);
+
+        if (result is null)
+            return; // Annulla: nessuna modifica.
+
+        MethodBodyEditor.WriteMethodBody(pagesDirectory, FormName, FormNamespace, actualMethodName, isAsync, result);
+
+        var hasCode = !string.IsNullOrWhiteSpace(result);
+        if (hasCode)
+            placed.WiredMethods.Add(displayName);
+        else
+            placed.WiredMethods.Remove(displayName);
+
+        AppendOutput($"Salvato {actualMethodName} in {FormName}.Behavior.cs ({(hasCode ? $"{MethodBodyEditor.CountBodyLines(result)} righe" : "vuoto")})");
+
+        RegenerateFiles();
+        RefreshPropertyGrid(placed);
     }
 
     // Modulo 9 (generalizzato oltre VbButton, per il modulo "finisci il timer"): doppio
     // click su un controllo -> genera l'handler dell'evento descritto da
     // ComponentEventInfo in {Form}.Behavior.cs (file dello sviluppatore, mai rigenerato
     // per intero) e collega l'evento nel markup/codice rigenerato.
-    private async void OnPlacedControlDoubleTapped(object? sender, TappedEventArgs e)
+    private void OnPlacedControlDoubleTapped(object? sender, TappedEventArgs e)
     {
         if (PlacedControlsList.SelectedItem is not string fieldName || _projectDirectory is null)
             return;
@@ -374,6 +638,10 @@ public partial class MainWindow : Window
         if (placed is null)
             return;
 
+        // Scorciatoia verso il modale per l'evento "principale" del tipo (il primo/unico
+        // registrato in ComponentEventInfo): la property grid sotto elenca TUTTI gli eventi
+        // con doppio click -> modale, questo resta solo un accesso rapido per il caso
+        // comune "un controllo, un evento" senza dover scorrere fino alla sezione Metodi.
         var eventInfo = ComponentEventInfo.For(placed.ControlType);
         if (eventInfo is null)
         {
@@ -381,26 +649,18 @@ public partial class MainWindow : Window
             return;
         }
 
-        var methodName = $"{fieldName}{eventInfo.MethodSuffix}";
-        var pagesDirectory = Path.Combine(_projectDirectory, "Pages");
-        var behaviorPath = BehaviorFileGenerator.EnsureEventHandler(pagesDirectory, FormName, FormNamespace, methodName, eventInfo.IsAsync);
-
-        if (!placed.HasEventHandler)
-        {
-            placed.HasEventHandler = true;
-            AppendOutput($"Generato handler {methodName} in {Path.GetFileName(behaviorPath)}");
-            await RegenerateAndReloadAsync();
-        }
-        else
-        {
-            AppendOutput($"{methodName} esiste gia' in {Path.GetFileName(behaviorPath)}: apri il file per modificarlo.");
-        }
+        _ = OpenMethodEditorAsync(placed, eventInfo.EventName, $"{fieldName}{eventInfo.MethodSuffix}", eventInfo.IsAsync);
     }
 
-    // Un componente (built-in o plugin) con una proprieta' che il generatore non sa
-    // ancora serializzare non deve far crashare l'IDE: si segnala in Output e si lascia
-    // il form nell'ultimo stato valido generato.
-    private async Task RegenerateAndReloadAsync()
+    // Scrive solo i file (veloce, sincrono) - non aspetta piu' il rebuild di dotnet watch
+    // ne' aggiorna la WebView: con piu' modifiche ravvicinate, aspettare/ricaricare a ogni
+    // singola modifica era lento e bloccava il flusso di lavoro. La sincronizzazione vera
+    // e propria (attesa rebuild + refresh WebView) e' ora solo manuale, via il bottone
+    // "Aggiorna" (OnForceRefreshClicked) - il bottone diventa rosso finche' non la premi.
+    // Un componente (built-in o plugin) con una proprieta' che il generatore non sa ancora
+    // serializzare non deve far crashare l'IDE: si segnala in Output e si lascia il form
+    // nell'ultimo stato valido generato.
+    private void RegenerateFiles()
     {
         string razorPath, designerCsPath;
         try
@@ -416,7 +676,16 @@ public partial class MainWindow : Window
 
         AppendOutput($"Generato -> {Path.GetFileName(razorPath)}, {Path.GetFileName(designerCsPath)}");
 
-        await ShowDesignerFormAsync();
+        _pendingSync = true;
+        UpdateSyncButtonState();
+    }
+
+    private void UpdateSyncButtonState()
+    {
+        if (_pendingSync)
+            ForceRefreshButton.Background = Brushes.OrangeRed;
+        else
+            ForceRefreshButton.ClearValue(Button.BackgroundProperty); // torna al colore di tema di default
     }
 
     // Dopo il primo drop naviga la WebView sulla pagina generata; dopo i drop successivi
@@ -426,13 +695,15 @@ public partial class MainWindow : Window
     // Attende il segnale di riavvio effettivo di Kestrel invece di un semplice delay: un
     // delay fisso navigava mentre `dotnet watch` stava ancora ricompilando/riavviando,
     // causando una race sui file di build (visto empiricamente durante lo sviluppo).
-    private async Task ShowDesignerFormAsync()
+    // Ritorna false in caso di timeout: il chiamante (OnForceRefreshClicked) usa questo per
+    // NON azzerare _pendingSync/il bottone "Aggiorna" rosso - non siamo davvero sincronizzati.
+    private async Task<bool> ShowDesignerFormAsync()
     {
         var uri = await _watchHost.WaitForNextRestartAsync(TimeSpan.FromSeconds(20));
         if (uri is null)
         {
             AppendOutput("Timeout in attesa del rebuild di dotnet watch: la pagina potrebbe non essere aggiornata.");
-            return;
+            return false;
         }
 
         _currentPagePath = "designerform";
@@ -450,6 +721,9 @@ public partial class MainWindow : Window
             DesignerWebView.Source = BuildUri(uri, design: true);
             _designerFormOpened = true;
         }
+
+        InvalidateDesignerWebViewDisplay();
+        return true;
     }
 
     // Modulo 10: F5 esce dalla modalita' di design e naviga la stessa pagina senza il
@@ -466,6 +740,7 @@ public partial class MainWindow : Window
         _isRunning = true;
         AppendOutput("Run (F5): avvio senza la modalita' di design.");
         DesignerWebView.Source = BuildUri(_watchHost.ServerUri, design: false);
+        InvalidateDesignerWebViewDisplay();
         return Task.CompletedTask;
     }
 
@@ -479,6 +754,7 @@ public partial class MainWindow : Window
         _isRunning = false;
         AppendOutput("Stop: torno alla modalita' di design.");
         DesignerWebView.Source = BuildUri(_watchHost.ServerUri, design: true);
+        InvalidateDesignerWebViewDisplay();
     }
 
     private Uri BuildUri(Uri serverUri, bool design) =>
@@ -549,7 +825,28 @@ public partial class MainWindow : Window
         OutputTextBox.Text = OutputTextBox.Text is { Length: > 0 } existing
             ? $"{existing}{Environment.NewLine}{line}"
             : line;
+
+        if (_outputAutoScroll)
+        {
+            // Il nuovo Extent non e' ancora disponibile subito dopo aver cambiato Text
+            // nello stesso frame: serve rimandare lo scroll dopo che il layout si aggiorna.
+            Dispatcher.UIThread.Post(() => _outputScrollViewer?.ScrollToEnd(), DispatcherPriority.Background);
+        }
     }
+
+    // Aggiorna _outputAutoScroll in base a dove si trova l'utente nel log: si disattiva
+    // se scrolla via dal fondo, si riattiva da solo se torna in fondo - comportamento
+    // standard di un log viewer.
+    private void OnOutputScrollChanged(object? sender, Avalonia.AvaloniaPropertyChangedEventArgs e)
+    {
+        if (e.Property != ScrollViewer.OffsetProperty || _outputScrollViewer is not { } scrollViewer)
+            return;
+
+        var distanceFromBottom = scrollViewer.Extent.Height - scrollViewer.Viewport.Height - scrollViewer.Offset.Y;
+        _outputAutoScroll = distanceFromBottom <= 2;
+    }
+
+    private void OnClearOutputClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => OutputTextBox.Text = string.Empty;
 
     // Modulo 5: avvia `dotnet watch` sul progetto Blazor come processo figlio e, quando
     // Kestrel e' pronto, punta la WebView all'URL reale (nessun URL hardcoded a priori).
@@ -558,14 +855,23 @@ public partial class MainWindow : Window
         _projectDirectory = Path.Combine(FindRepoRoot(), "templates", "BlazorPwaTemplate");
         LoadComponents(); // solo file locali, non serve attendere che dotnet watch sia pronto
 
+        BusyOverlay.IsVisible = true;
         try
         {
             var uri = await _watchHost.StartAsync(_projectDirectory, "http://localhost:5245");
-            await Dispatcher.UIThread.InvokeAsync(() => DesignerWebView.Source = BuildUri(uri, design: true));
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                DesignerWebView.Source = BuildUri(uri, design: true);
+                InvalidateDesignerWebViewDisplay();
+            });
         }
         catch (Exception ex)
         {
             Console.WriteLine($"[DesignerHost] Errore nell'avvio di dotnet watch: {ex}");
+        }
+        finally
+        {
+            BusyOverlay.IsVisible = false;
         }
     }
 

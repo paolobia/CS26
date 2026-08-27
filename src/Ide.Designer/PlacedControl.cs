@@ -13,11 +13,12 @@ namespace Ide.Designer;
 public sealed record PlacedControl(string FieldName, string ControlType, IDesignComponent Visual)
 {
     /// <summary>
-    /// Modulo 9 (generalizzato oltre VbButton): true se il doppio click ha gia' generato
-    /// l'handler dell'evento descritto da <see cref="ComponentEventInfo.For"/> per questo
-    /// controllo (es. <c>Click</c> per VbButton, <c>Tick</c> per VbTimer) in
-    /// <c>{Form}.Behavior.cs</c>. Dice a <see cref="FormCodeGenerator"/> se collegare
-    /// l'evento nel markup generato o in codice.
+    /// Nomi logici (es. "OnClick", <see cref="SpecialMethodNames.Constructor"/>) dei metodi
+    /// che hanno gia' del codice non-vuoto in <c>{Form}.Behavior.cs</c>. Dice a
+    /// <see cref="FormCodeGenerator"/> quali eventi collegare nel markup/OnInitialized e
+    /// quali Costruttori/Distruttori chiamare - sostituisce il vecchio singolo
+    /// <c>HasEventHandler</c> (un solo evento per tipo non basta piu' con la property grid
+    /// che elenca tutti gli eventi disponibili).
     /// </summary>
-    public bool HasEventHandler { get; set; }
+    public HashSet<string> WiredMethods { get; } = [];
 }

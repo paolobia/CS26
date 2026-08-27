@@ -27,6 +27,11 @@
                 <Separator />
                 <!-- Modulo 14: ricompila Components/ senza riavviare l'IDE. -->
                 <MenuItem Header="_Reload Components" Click="OnReloadComponentsClicked" />
+                <!-- Forza il ridisegno della WebView senza attendere un nuovo rebuild:
+                     mitiga il caso in cui dotnet watch ha gia' finito ma la WebView nativa
+                     non ha ripulito il buffer (visto empiricamente: serve un resize della
+                     finestra per farla ridisegnare, questo bottone evita di doverlo fare). -->
+                <MenuItem Header="_Force Refresh" Click="OnForceRefreshClicked" />
             </MenuItem>
             <MenuItem Header="_Run">
                 <MenuItem Header="_Start (F5)" Click="OnRunMenuClicked" />
@@ -43,10 +48,27 @@
             <MenuItem Header="_Help" />
         </Menu>
 
+        <!-- Toolbar: stessi comandi chiave del menu, ma come bottoni piatti - non aprono
+             popup, quindi restano cliccabili anche quando il problema "airspace" della
+             WebView nativa rendeva i menu a tendina inaffidabili sopra la superficie di
+             design (vedi commento su EnvironmentRequested nel code-behind). -->
+        <Border DockPanel.Dock="Top" BorderBrush="Gray" BorderThickness="0,0,0,1" Padding="4">
+            <StackPanel Orientation="Horizontal" Spacing="4">
+                <Button Content="🔄 Reload Components" Click="OnReloadComponentsClicked" />
+                <Button x:Name="ForceRefreshButton" Content="🔁 Force Refresh" Click="OnForceRefreshClicked" />
+                <Separator />
+                <Button Content="▶ Run" Click="OnRunMenuClicked" />
+                <Button Content="⏹ Stop" Click="OnStopMenuClicked" />
+            </StackPanel>
+        </Border>
+
         <!-- Pannello Output/Immediate in basso -->
         <Border DockPanel.Dock="Bottom" Height="140" BorderBrush="Gray" BorderThickness="0,1,0,0">
             <DockPanel Margin="4">
-                <TextBlock DockPanel.Dock="Top" Text="Output" FontWeight="Bold" Margin="4" />
+                <DockPanel DockPanel.Dock="Top">
+                    <Button DockPanel.Dock="Right" Content="C" Width="24" Click="OnClearOutputClicked" ToolTip.Tip="Svuota il log" />
+                    <TextBlock Text="Output" FontWeight="Bold" Margin="4" />
+                </DockPanel>
                 <TextBox x:Name="OutputTextBox" IsReadOnly="True" AcceptsReturn="True"
                          Background="Transparent" BorderThickness="0" />
             </DockPanel>
@@ -57,7 +79,8 @@
         <Border DockPanel.Dock="Left" Width="180" BorderBrush="Gray" BorderThickness="0,0,1,0">
             <DockPanel Margin="4">
                 <TextBlock DockPanel.Dock="Top" Text="Toolbox" FontWeight="Bold" Margin="4" />
-                <ListBox x:Name="ToolboxList" SelectionMode="Single" Background="Transparent" />
+                <ListBox x:Name="ToolboxList" SelectionMode="Single" Background="Transparent"
+                         SelectionChanged="OnToolboxSelectionChanged" />
             </DockPanel>
         </Border>
 
@@ -70,15 +93,30 @@
                 <TextBlock DockPanel.Dock="Top" Text="Properties" FontWeight="Bold" Margin="4" />
                 <ListBox x:Name="PlacedControlsList" DockPanel.Dock="Top" Height="120"
                          SelectionChanged="OnPlacedControlSelected" />
-                <StackPanel x:Name="PropertyEditorsPanel" Margin="4" Spacing="4" />
+                <Button DockPanel.Dock="Top" Content="Elimina" Click="OnDeletePlacedControlClicked" Margin="0,4,0,0" />
+                <ScrollViewer>
+                    <Grid x:Name="PropertyEditorsPanel" ColumnDefinitions="Auto,*" Margin="4" />
+                </ScrollViewer>
             </DockPanel>
         </Border>
 
         <!-- Superficie di design al centro: la WebView che ospita il progetto Blazor reale.
-             Modulo 6: accetta il drop dalla Toolbox (nessuna persistenza su file ancora,
-             quella e' il modulo 7 - qui si registra solo il drop in Output). -->
-        <Border x:Name="DesignSurface" BorderBrush="Gray" BorderThickness="1" DragDrop.AllowDrop="True">
-            <NativeWebView x:Name="DesignerWebView" />
+             Piazzamento controlli: click su un elemento della Toolbox per "armarlo", click
+             qui per piazzarlo (non drag&drop nativo - vedi commento su OnDesignSurfacePointerPressed
+             nel code-behind per il perche'). -->
+        <Border x:Name="DesignSurface" BorderBrush="Gray" BorderThickness="1">
+            <Grid>
+                <NativeWebView x:Name="DesignerWebView" />
+                <!-- Watermark mostrato durante l'attesa del rebuild di dotnet watch (fino a
+                     20s): senza, un drop/una modifica di proprieta' sembra non fare nulla
+                     finche' il controllo non appare di colpo. IsHitTestVisible="False" cosi'
+                     non impedisce fisicamente un nuovo drop (la correttezza e' garantita dalla
+                     guardia _regenerateInProgress nel code-behind, non da un blocco qui). -->
+                <Border x:Name="BusyOverlay" Background="#AA000000" IsVisible="False" IsHitTestVisible="False">
+                    <TextBlock Text="Aggiornamento in corso..." Foreground="White" FontSize="16"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+            </Grid>
         </Border>
 
     </DockPanel>

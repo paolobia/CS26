@@ -13,8 +13,26 @@ public sealed class DotnetWatchHost : IDisposable
 {
     private static readonly Regex ListeningOnRegex = new(@"Now listening on:\s*(https?://\S+)", RegexOptions.Compiled);
 
+    // Confermato empiricamente (log reali dell'utente): per una modifica a .razor/.razor.cs
+    // gia' tracciati, dotnet watch applica l'Hot Reload invece di un riavvio completo -
+    // "Now listening on:" non ricompare MAI in questo caso. WaitForNextRestartAsync
+    // aspettava solo quella riga, quindi andava sempre in timeout (20s) dopo ogni
+    // piazzamento/modifica di proprieta', lasciando la WebView sulla pagina vecchia.
+    private static readonly Regex HotReloadCompletedRegex =
+        new(@"Hot reload of changes (succeeded|failed)\.|No hot reload changes to apply\.", RegexOptions.Compiled);
+
+    // Debounce: FormCodeGenerator scrive .razor e .razor.designer.cs in rapida successione,
+    // ma dotnet watch a volte li tratta come UN solo evento di modifica (un ciclo di hot
+    // reload) e a volte come DUE separati (osservato nei log reali: il primo spesso produce
+    // "No hot reload changes to apply." da solo, il secondo, poco dopo, "succeeded.") -
+    // completare al primo segnale rischierebbe di dire "pronto" prima che il secondo file
+    // sia stato davvero applicato. Si aspetta un breve intervallo di silenzio dopo l'ultimo
+    // segnale rilevante prima di considerare il ciclo di build concluso.
+    private static readonly TimeSpan SignalDebounce = TimeSpan.FromMilliseconds(700);
+
     private Process? _process;
     private TaskCompletionSource<Uri>? _pendingRestartTcs;
+    private CancellationTokenSource? _debounceCts;
 
     public Uri? ServerUri { get; private set; }
 
@@ -64,11 +82,13 @@ public sealed class DotnetWatchHost : IDisposable
     }
 
     /// <summary>
-    /// Attende il prossimo riavvio del server (nuova occorrenza di "Now listening on:"
-    /// nell'output di `dotnet watch`), utile dopo aver scritto file che il generatore di
-    /// codice sa che forzeranno una ricompilazione. Se il timeout scade (es. perche' la
-    /// modifica non ha richiesto un riavvio, o la build e' fallita), restituisce null:
-    /// il chiamante decide come procedere.
+    /// Attende che dotnet watch abbia finito di elaborare l'ultima modifica ai file -
+    /// tramite un riavvio completo (nuova "Now listening on:") oppure un ciclo di Hot
+    /// Reload (che non riavvia il processo: <see cref="ServerUri"/> resta invariato). Utile
+    /// dopo aver scritto file che il generatore di codice sa che forzeranno una
+    /// ricompilazione. Se il timeout scade (es. perche' la build e' fallita in un modo che
+    /// non produce nessuno dei due segnali), restituisce null: il chiamante decide come
+    /// procedere.
     /// </summary>
     public async Task<Uri?> WaitForNextRestartAsync(TimeSpan timeout, CancellationToken cancellationToken = default)
     {
@@ -101,12 +121,52 @@ public sealed class DotnetWatchHost : IDisposable
         Console.WriteLine($"[dotnet watch] {line}");
 
         var match = ListeningOnRegex.Match(line);
-        if (!match.Success)
+        if (match.Success)
+        {
+            var uri = new Uri(match.Groups[1].Value);
+            ServerUri = uri;
+            readyTcs.TrySetResult(uri);
+            ScheduleRestartSignal();
+            return;
+        }
+
+        if (HotReloadCompletedRegex.IsMatch(line))
+            ScheduleRestartSignal();
+    }
+
+    // (Ri)pianifica il completamento di WaitForNextRestartAsync dopo un breve intervallo di
+    // silenzio: ogni nuovo segnale rilevante annulla e riavvia l'attesa, cosi' due file
+    // scritti quasi insieme (.razor + .razor.designer.cs) ma elaborati da dotnet watch come
+    // eventi separati non completano l'attesa dopo il primo, troppo presto.
+    // Pianifica solo se qualcuno sta davvero aspettando (_pendingRestartTcs non nullo):
+    // altrimenti il debounce del "Now listening on" iniziale (StartAsync, quando nessuno
+    // sta ancora chiamando WaitForNextRestartAsync) potrebbe restare in sospeso e
+    // completare per sbaglio una WaitForNextRestartAsync successiva e scorrelata, appena
+    // questa viene chiamata - visto accadere davvero in un test manuale.
+    private void ScheduleRestartSignal()
+    {
+        if (_pendingRestartTcs is null)
             return;
 
-        var uri = new Uri(match.Groups[1].Value);
-        readyTcs.TrySetResult(uri);
-        _pendingRestartTcs?.TrySetResult(uri);
+        _debounceCts?.Cancel();
+        var cts = new CancellationTokenSource();
+        _debounceCts = cts;
+        _ = SignalAfterDebounceAsync(cts.Token);
+    }
+
+    private async Task SignalAfterDebounceAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(SignalDebounce, cancellationToken).ConfigureAwait(false);
+        }
+        catch (TaskCanceledException)
+        {
+            return; // superato da un segnale piu' recente, questa pianificazione e' obsoleta
+        }
+
+        if (ServerUri is { } uri)
+            _pendingRestartTcs?.TrySetResult(uri);
     }
 
     public void Dispose()
